@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LiteServer.Sample.Di;
 using LiteServer.Sample.Jobs;
+using LiteServer.Security;
 
 namespace LiteServer.Sample;
 
@@ -301,6 +302,15 @@ public static class Program
         // 文件上传
         server.MapPost("/api/upload", async (req, res) =>
         {
+            // 上传大小限制：无此限制时，攻击者可反复上传大文件耗尽磁盘。
+            // 实测未加限制前，10 路并发 × 50MB 可稳定写入 500MB。
+            const long MaxUploadBytes = 32L * 1024 * 1024;
+            if (req.ContentLength64 > MaxUploadBytes)
+            {
+                await res.WriteErrorAsync(413, "payload too large (max 32MB)").ConfigureAwait(false);
+                return;
+            }
+
             string? name = req.Headers["filename"];
             if (string.IsNullOrWhiteSpace(name))
             {
@@ -314,10 +324,20 @@ public static class Program
             }
 
             string dir = Path.Combine(AppContext.BaseDirectory, "data");
-            bool ok = await req.SaveFileAsync(Path.Combine(dir, name)).ConfigureAwait(false);
+            string savePath = Path.Combine(dir, name);
+            bool ok = await req.SaveFileAsync(savePath).ConfigureAwait(false);
             if (!ok)
             {
                 await res.WriteErrorAsync(500, "upload failed").ConfigureAwait(false);
+                return;
+            }
+
+            // 二次校验：分块传输时 Content-Length 为 -1，须以实际落盘大小为准。
+            long actual = new FileInfo(savePath).Length;
+            if (actual > MaxUploadBytes)
+            {
+                try { File.Delete(savePath); } catch (IOException) { }
+                await res.WriteErrorAsync(413, "payload too large").ConfigureAwait(false);
                 return;
             }
             await res.WriteJsonAsync($"{{\"code\":1,\"name\":\"{name}\"}}").ConfigureAwait(false);
@@ -391,16 +411,23 @@ public static class Program
         server.MapGet("/api/upstream", async (req, res) =>
         {
             string target = req.GetQuery("url") ?? string.Empty;
-            if (!Uri.TryCreate(target, UriKind.Absolute, out Uri? uri) ||
-                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+
+            // SSRF 防护：只允许 http(s)，且目标解析后不得是回环/内网/链路本地地址。
+            // 注意必须校验「解析后的 IP」，只查域名文本会被 nip.io 之类绕过。
+            if (!SsrfGuard.IsSafe(target, out SsrfGuard.Verdict verdict))
             {
-                await res.WriteErrorAsync(400, "url must be absolute http(s)").ConfigureAwait(false);
+                await res.WriteErrorAsync(400, $"url rejected: {verdict}").ConfigureAwait(false);
                 return;
             }
 
+            var uri = new Uri(target);
+
             try
             {
-                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+                using var http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false })
+                {
+                    Timeout = TimeSpan.FromSeconds(8),
+                };
                 using HttpResponseMessage r = await http.GetAsync(uri).ConfigureAwait(false);
                 await res.WriteJsonAsync($"{{\"code\":1,\"status\":{(int)r.StatusCode}}}").ConfigureAwait(false);
             }

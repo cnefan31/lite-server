@@ -197,6 +197,32 @@ macOS arm64（Apple Silicon，10 核），每轮 2000 请求、并发 50、3 轮
 **ETag 陈旧 bug**——文件从 4 字节改成 11 字节后 ETag 未变，客户端收到 304 而继续读旧内容。
 该改动已整体回退。教训：**微基准的收益必须用端到端测量验证，且缓存协商头绝不能缓存。**
 
+## 安全性
+
+框架层已处理的攻击面：路径穿越（含编码/双重编码/反斜杠/UTF-8 过编码绕过）、
+dotfile 拒绝、JWT 验签（`alg=none` 与弱密钥均被拒，定长比较防时序侧信道）、
+token 黑名单、CRLF 头注入、WebSocket 握手鉴权与消息大小上限。
+
+自带 SSRF 防护组件 `SsrfGuard`（用于按用户 URL 发起请求的场景）：
+
+```csharp
+using LiteServer.Security;
+
+if (!SsrfGuard.IsSafe(userUrl, out SsrfGuard.Verdict verdict))
+{
+    return res.WriteErrorAsync(400, $"url rejected: {verdict}");
+}
+```
+
+它会在**解析出 IP 之后**判定，拒绝回环 / 私有网段 / 链路本地（含云元数据 169.254.169.254）/
+保留段，并处理十进制、八进制、十六进制 IP 与 IPv4 映射 IPv6 等变形。
+
+```bash
+./tools/security-test.sh    # 28 项安全回归断言
+```
+
+完整审计结果与已知局限见 [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md)。
+
 ## 能力清单
 
 | 类别 | 能力 |

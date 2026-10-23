@@ -156,15 +156,34 @@ public sealed class LiteWebServer : IAsyncDisposable
             return Task.FromResult(true);
         }
 
-        string allow = string.IsNullOrEmpty(allowedOrigin) ? origin : allowedOrigin;
+        // 安全默认：未显式配置允许来源时，只回显「同源」请求。
+        // 早期实现是把任意 Origin 原样回显并附 Allow-Credentials: true，
+        // 这等于允许任何站点带凭证读取响应（实测 evil.example / null 都被放行），属严重配置缺陷。
+        bool hasExplicitAllowList = !string.IsNullOrEmpty(allowedOrigin);
 
-        if (!string.Equals(allow, origin, StringComparison.OrdinalIgnoreCase))
+        if (!hasExplicitAllowList)
         {
-            // 未授权的来源：不写 CORS 头，让浏览器自行拦截。
+            // 同源判定：Origin 的 scheme+host+port 必须与本服务一致。
+            string? self = request.Url is null ? null : $"{request.Url.Scheme}://{request.Url.Authority}";
+            if (self is null || !string.Equals(origin, self, StringComparison.OrdinalIgnoreCase))
+            {
+                // 跨源且未授权：不写任何 CORS 头，让浏览器拦截。
+                return Task.FromResult(true);
+            }
+        }
+        else if (!string.Equals(allowedOrigin, origin, StringComparison.OrdinalIgnoreCase))
+        {
             return Task.FromResult(true);
         }
 
-        response.Headers["Access-Control-Allow-Origin"] = allow;
+        // "null" Origin 意味着 sandbox iframe / file:// / 跨源重定向，
+        // 这类来源不可信，永不放行（否则可被用来做凭证读取）。
+        if (string.Equals(origin, "null", StringComparison.Ordinal))
+        {
+            return Task.FromResult(true);
+        }
+
+        response.Headers["Access-Control-Allow-Origin"] = origin;
         response.Headers["Access-Control-Allow-Credentials"] = "true";
         response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, PATCH, OPTIONS";
         response.Headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With";

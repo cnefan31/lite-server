@@ -430,6 +430,7 @@ footer{
         <input type="url" id="upstreamUrl" value="" spellcheck="false">
         <button data-call="upstream">探活</button>
         <button data-call="upstream-bad" class="quiet">非法 URL · 应 400</button>
+        <button data-call="upstream-ssrf" class="quiet">内网地址 · 应 400</button>
       </div>
       <div class="bar">
         <span class="lab">静态</span>
@@ -795,6 +796,13 @@ async function doCookie() {
 }
 
 async function doUpstream(kind) {
+  if (kind === "upstream-ssrf") {
+    // SSRF 防护验证：内网/回环地址必须被拒绝，而不是真的去请求
+    const target = "http://127.0.0.1:" + new URL(base()).port + "/api/health";
+    return render("out-misc",
+      await call("GET", "/api/upstream?url=" + encodeURIComponent(target), { expect: 400 }),
+      "内网目标（应被 SSRF 防护拒绝）：" + target);
+  }
   const bad = kind === "upstream-bad";
   const target = bad ? "ftp://example.com/x" : ($("upstreamUrl").value.trim() || url("/api/health"));
   render("out-misc",
@@ -920,7 +928,7 @@ const CASES = [
   ["tasks 方法不允许", "PUT", "/api/tasks", 405, true],
   ["tasks 删除不存在", "DELETE", "/api/tasks/__nope__", 404, true],
   ["upstream 非法 url", "GET", "/api/upstream?url=ftp%3A%2F%2Fx", 400, true],
-  ["upstream 自探活", "GET", "/api/upstream?url=", 200, true, null, { dynamic: true }],
+  ["upstream 拦截内网", "GET", "/api/upstream?url=", 400, true, null, { dynamic: true }],
   ["download 路径穿越", "GET", "/api/download?name=..%2F..%2Fetc%2Fpasswd", 400, true],
   ["download 不存在", "GET", "/api/download?name=__nope__.txt", 404, true],
   ["chunk 长连接", "GET", "/api/chunk?count=2", 200, true],
@@ -961,7 +969,8 @@ async function runAll() {
   for (let i = 0; i < CASES.length; i++) {
     const [name, method, path, expect, needTok, bodyFn, opts] = CASES[i];
     let finalPath = path;
-    if (opts && opts.dynamic) finalPath = path + encodeURIComponent(url("/api/health"));
+    // SSRF 用例：目标指向本机回环地址，防护到位时应返回 400 而非去请求它
+    if (opts && opts.dynamic) finalPath = path + encodeURIComponent("http://127.0.0.1:" + (new URL(base())).port + "/api/health");
 
     const h = {};
     if (needTok && S.token && !(opts && opts.noToken)) h["Authorization"] = "Bearer " + S.token;
@@ -1024,6 +1033,7 @@ const DISPATCH = {
   cookie: doCookie,
   upstream: () => doUpstream("upstream"),
   "upstream-bad": () => doUpstream("upstream-bad"),
+  "upstream-ssrf": () => doUpstream("upstream-ssrf"),
   static: () => doStatic("static"),
   "static-hidden": () => doStatic("static-hidden"),
   di: doDi,
@@ -1058,7 +1068,8 @@ $("baseUrl").onchange = () => { S.base = normBase($("baseUrl").value); $("baseUr
 (function init() {
   S.base = normBase(location.origin);
   $("baseUrl").value = S.base;
-  $("upstreamUrl").value = S.base + "/api/health";
+  // 默认放一个公网地址：指向本机地址会被 SSRF 防护正常拦截
+  $("upstreamUrl").value = "https://example.com";
   setToken(savedToken());
   refreshMode();
   if (!S.token) doLogin();
