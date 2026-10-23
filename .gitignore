@@ -1,0 +1,16 @@
+# 构建产物
+bin/
+obj/
+dist/
+*.user
+*.suo
+.vs/
+
+# 示例服务运行时产生的上传目录
+samples/**/data/
+
+# 本机专用 NuGet 配置（含与开发机绑定的包缓存路径，不应共享）
+nuget.config
+
+# macOS
+.DS_Store

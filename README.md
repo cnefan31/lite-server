@@ -1,0 +1,203 @@
+# LiteServer
+
+零依赖的轻量 .NET Web 能力库。基于 `System.Net.HttpListener`，不需要 IIS / Kestrel，
+可嵌入任何 .NET 应用，也可作为独立服务运行。支持 **.NET 通用主机（Generic Host）** 与 **NativeAOT**。
+
+```csharp
+await using var server = new LiteWebServer();
+server.MapGet("/hello", (req, res) => res.WriteAsync("Hello LiteServer"));
+await server.StartAsync("127.0.0.1", 8090);
+```
+
+## 设计取向
+
+LiteServer 是原创实现。它在能力边界上参考了同类轻量 HttpListener 框架的公开经验
+（包括社区文档、公开 API 形态，以及在真实项目中对这类框架的实测结论），
+但**代码全部重写**，不含任何第三方实现。
+
+下述设计取向构成了本项目的骨架：
+
+| 取向 | 说明 |
+|---|---|
+| 连接表与心跳时间表分离 | WebSocket 用两个 ConcurrentDictionary 分别存 socket 与最后活跃时间，读取心跳不阻塞连接读写 |
+| 接收缓冲池化 | `ArrayPool<byte>.Shared` 租借，长连接下不产生逐帧 GC |
+| 心跳惰性启动 + 幂等 | 不启用心跳就零后台开销 |
+| 路由两级结构 | 精准路径走字典直查，通配按段数分桶后线性比对 |
+| 静态文件容纳校验 | `GetFullPath` + 前缀包含判定，能挡 `..%2F` 编码绕过 |
+| ETag 指纹 | 由「修改时间刻度 + 文件长度」构成，无需读内容 |
+| accept 循环退避 | 异常后先查 `IsListening`，避免故障时空转打满 CPU |
+
+## 与常见轻量框架的差异
+
+这些是 LiteServer 重新设计、而非照搬的地方：
+
+- **同路径可注册多个方法**。常见做法是以路径为唯一键存处理器，第二个注册会被静默忽略；
+  本项目的路由表以 (路径, 方法) 为组合键，GET/POST/PUT/DELETE 可共存。
+- **鉴权支持三种 token 通道**：`Authorization` 头 / `?token=` / cookie。
+  浏览器原生 `EventSource` 与 `WebSocket` 无法设置自定义请求头，只认请求头会让 SSE/WS 永远 401。
+- **JWT 黑名单语义明确**：`Add(token, expireAtUnixSeconds)` 收绝对时间戳而非 TTL。
+- **完整 Range 支持**：206 / 416 / `Content-Range` 齐备，视频可拖动进度条。
+- **中间件顺序即执行顺序**，无隐式插队。
+- **全库无反射、无动态代码**，NativeAOT 下零 IL 警告。
+
+## 中间件顺序：静态文件与鉴权
+
+默认是**鉴权在前、静态文件在后**（安全优先）：受保护站点不会被匿名拉走任何资源。
+副作用是 dotfile 探测会先拿到 `401` 而不是 `403`——请求还没走到静态层就被挡了。
+
+如果你的站点本来就是公开静态站（比如内置的测试页），把顺序翻过来：
+
+```csharp
+options.StaticFilesBeforeAuth = true;   // 静态先跑：dotfile 由静态层拒绝(403)，静态资源匿名可取
+```
+
+两种顺序下受鉴权保护的接口都不会被匿名访问，区别只在静态资源的可及性。
+
+## 两种启动方式
+
+### 方式一：通用主机（推荐用于生产）
+
+与 DI、配置、日志、健康检查、优雅停机共用同一套 .NET 宿主。
+
+```csharp
+using LiteServer;
+using LiteServer.Hosting;
+
+var builder = Host.CreateApplicationBuilder(args);
+
+builder.Services.AddLiteServer(
+    options =>
+    {
+        options.Host = "127.0.0.1";
+        options.Port = 8090;
+        options.JwtSecret = "your-secret";
+        options.EnableWebSocket = true;
+        options.StaticFilePrefix = "/";
+        options.StaticFileRoot = "wwwroot";
+        options.AnonymousPaths.Add("/api/health");
+    },
+    server =>
+    {
+        server.MapGet("/api/health", (req, res) => res.WriteJsonAsync("""{"status":"ok"}"""));
+    });
+
+await builder.Build().RunAsync();
+```
+
+拿到容器中的实例即可注册路由、挂 WebSocket 回调：
+
+```csharp
+var server = host.Services.GetRequiredService<LiteWebServer>();
+server.WebSockets.OnMessage = async (id, msg, reply) => await reply($"echo:{msg}");
+```
+
+### 方式二：独立模式
+
+不引入通用主机，自建生命周期：
+
+```csharp
+await using var server = new LiteWebServer();
+server.UseCors();
+server.MapGet("/api/health", (req, res) => res.WriteAsync("ok"));
+server.UseJwtAuth("your-secret");
+server.UseStaticFiles("/", "wwwroot");
+
+await server.StartAsync("127.0.0.1", 8090);
+await Task.Delay(Timeout.Infinite);   // 或用 Ctrl+C 驱动
+```
+
+## 依赖注入与后台任务
+
+`AddLiteServer` 会把根容器交给服务器，**每个请求创建独立作用域**，处理器内直接解析服务。
+DI 相关扩展方法都在根命名空间 `LiteServer` 下，`using LiteServer;` 一行即可：
+
+```csharp
+using LiteServer;          // RequireService / GetService / Services 扩展
+
+builder.Services.AddSingleton<SingletonCounter>();
+builder.Services.AddScoped<ScopedStamp>();      // 每请求一个
+builder.Services.AddTransient<TransientStamp>();// 每次解析都新建
+
+builder.Services.AddSingleton<JobService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<JobService>());  // 随主机启停
+
+server.MapGet("/api/di", (req, res) =>
+{
+    var showcase = req.RequireService<DiShowcase>();   // 构造函数注入
+    var again    = req.RequireService<ScopedStamp>();  // 同请求内复用同一实例
+    ...
+});
+```
+
+实现要点：
+
+- 请求作用域由 `AsyncLocal<IServiceProvider>` 承载。`HttpListenerRequest` 在 .NET Core 上
+  没有可挂载数据的 `Items` 集合，而路由处理器签名里也没有 `IServiceProvider`；
+  `AsyncLocal` 按逻辑调用链传播，同请求多层 `await` 共享、并发请求互不串扰。
+- 作用域在请求结束时释放，`IDisposable`/`IAsyncDisposable` 服务得以正常回收。
+- `BackgroundService` 与 DI 全程不使用反射，NativeAOT 下零 IL 警告。
+- **DI 是可选的**：不设 `ServiceProvider` 时库照常工作，只是处理器取不到服务；
+  误调 `RequireService<T>()` 会抛 `InvalidOperationException` 而非静默返回 null。
+  库本身只引用 `*.Abstractions` 包，不绑定任何容器实现。
+
+示例提供了三个验证端点：
+
+| 端点 | 验证内容 |
+|---|---|
+| `GET /api/di` | 三种生命周期语义、同请求 Scoped 复用、跨请求 Scoped 隔离、Singleton 共享 |
+| `GET /api/di/log` | `ILogger<T>` 构造函数注入在 AOT 下可用 |
+| `GET/POST/DELETE /api/jobs[/{id}]` | 后台任务创建、进度轮询、取消，由 `BackgroundService` 承载 |
+
+## 能力清单
+
+| 类别 | 能力 |
+|---|---|
+| 路由 | 精准路由、`*` 单段通配、同路径多方法、任意方法路由、405 自动带 `Allow` 头 |
+| 请求 | 查询参数强类型读取、表单解析、Body 读取（同步/异步）、Cookie 读取、Token 提取 |
+| 响应 | 文本/JSON 写出、状态码、204、错误响应、CORS 预检 |
+| 文件 | 下载（含 Range/206/416）、上传（流式落盘 + 进度回调）、流式发送、直播流 |
+| 实时 | SSE、分块长连接、WebSocket（广播、定向、主动断开、心跳超时） |
+| 安全 | JWT（HS256 签发/验签/解码）、Token 黑名单、简单 Token、Bearer Token、限流 |
+| 中间件 | 自定义中间件、静态文件托管（ETag/304/隐藏文件拒绝/目录防穿越） |
+| 宿主 | 通用主机集成、DI 注册、每请求作用域、NativeAOT |
+| 后台 | `BackgroundService` 承载的后台任务、进度查询、取消 |
+
+## 快速验证
+
+```bash
+# 通用主机模式
+dotnet run --project samples/LiteServer.Sample
+
+# 独立模式
+dotnet run --project samples/LiteServer.Sample -- --standalone
+
+# AOT 发布
+dotnet publish samples/LiteServer.Sample -c Release -r osx-arm64 -o dist
+```
+
+## 目录结构
+
+```
+src/LiteServer/
+  LiteWebServer.cs            服务器主体：路由/中间件/WS/生命周期
+  Http/ContentTypes.cs        MIME 映射
+  Http/RequestExtensions.cs   请求读取
+  Http/ResponseExtensions.cs  响应写出
+  Http/ChunkWriter.cs         分块推送
+  Http/FileTransfer.cs        文件上传下载（Range）
+  Http/CookieExtensions.cs    Cookie 读写
+  Routing/RouteTable.cs       两级路由表
+  Middleware/MiddlewarePipeline.cs
+  Middleware/StaticFilesMiddleware.cs
+  Middleware/AuthMiddleware.cs
+  Security/Jwt.cs             HS256 JWT
+  Security/TokenBlacklist.cs  吊销名单 + 限流
+  WebSockets/WebSocketHub.cs  连接管理
+  RequestScope.cs             每请求 DI 作用域（根命名空间）
+  Hosting/                    通用主机集成
+samples/LiteServer.Sample/    双模式示例
+```
+
+## 许可
+
+本仓库为原创实现，采用 MIT 许可证。详见 [LICENSE](LICENSE)。

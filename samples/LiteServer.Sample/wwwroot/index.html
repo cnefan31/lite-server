@@ -1,0 +1,1068 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>lite-server — API 测试台</title>
+<style>
+/* ============================================================
+   Apple-minimal white
+   要点：留白先行、发丝级分隔线代替边框、无阴影浮层、
+         SF 字体栈 + 紧字距大标题、单一强调色 #0071e3、
+         药丸按钮、输出区用次级底色块而非描边盒子。
+   ============================================================ */
+:root{
+  --bg:#ffffff;
+  --bg-sub:#fbfbfd;
+  --tile:#f5f5f7;
+  --ink:#1d1d1f;
+  --ink-2:#6e6e73;
+  --ink-3:#86868b;
+  --hair:rgba(0,0,0,.10);
+  --hair-soft:rgba(0,0,0,.06);
+  --accent:#0071e3;
+  --accent-ink:#0066cc;
+  --ok:#1d7a3e;
+  --warn:#8a5300;
+  --err:#c0271b;
+  --wash-ok:rgba(29,122,62,.07);
+  --wash-warn:rgba(138,83,0,.08);
+  --wash-err:rgba(192,39,27,.07);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#000000; --bg-sub:#0a0a0b; --tile:#1c1c1e;
+    --ink:#f5f5f7; --ink-2:#a1a1a6; --ink-3:#8e8e93;
+    --hair:rgba(255,255,255,.14); --hair-soft:rgba(255,255,255,.08);
+    --accent:#0a84ff; --accent-ink:#409cff;
+    --ok:#4fd17b; --warn:#e0a33a; --err:#ff6961;
+    --wash-ok:rgba(79,209,123,.10); --wash-warn:rgba(224,163,58,.12); --wash-err:rgba(255,105,97,.10);
+  }
+}
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{scroll-behavior:smooth;scroll-padding-top:132px}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font:400 16px/1.5 var(--sans);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+::selection{background:rgba(0,113,227,.18)}
+
+/* ---------- 顶栏：半透明毛玻璃 ---------- */
+.nav{
+  position:sticky;top:0;z-index:50;
+  background:color-mix(in srgb, var(--bg) 72%, transparent);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--hair-soft);
+}
+.nav-in{
+  max-width:1080px;margin:0 auto;padding:0 24px;height:52px;
+  display:flex;align-items:center;gap:14px;
+}
+.brand{display:flex;align-items:center;gap:9px;font-size:15px;font-weight:600;letter-spacing:-.01em}
+.brand .glyph{
+  width:19px;height:19px;border-radius:6px;background:var(--ink);
+  display:grid;place-items:center;flex:0 0 auto;
+}
+.brand .glyph::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--bg)}
+.nav .sep{width:1px;height:15px;background:var(--hair);flex:0 0 auto}
+.nav .crumb{font-size:13px;color:var(--ink-3);letter-spacing:-.005em}
+.nav .grow{flex:1}
+.chip{
+  font:500 12px/1 var(--sans);letter-spacing:-.005em;
+  padding:6px 11px;border-radius:980px;background:var(--tile);color:var(--ink-2);
+  white-space:nowrap;display:inline-flex;align-items:center;gap:6px;
+}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:var(--ink-3)}
+.chip.live .dot{background:var(--ok)}
+.chip.warn .dot{background:var(--warn)}
+.chip.mono{font-family:var(--mono);letter-spacing:0;font-size:11.5px}
+
+/* ---------- 版面 ---------- */
+main{max-width:1080px;margin:0 auto;padding:0 24px 120px}
+
+.hero{padding:72px 0 40px;border-bottom:1px solid var(--hair-soft)}
+.eyebrow{
+  font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--accent-ink);margin:0 0 14px;
+}
+h1{
+  margin:0;font-size:clamp(38px,6vw,60px);line-height:1.05;font-weight:700;
+  letter-spacing:-.028em;
+}
+.lede{margin:18px 0 0;max-width:56ch;font-size:19px;line-height:1.45;color:var(--ink-2);letter-spacing:-.008em}
+
+/* 顶栏控制区 */
+.console{
+  margin:36px 0 0;padding:22px;border-radius:16px;background:var(--tile);
+  display:grid;gap:14px;
+}
+.field{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.field > .k{font-size:13px;color:var(--ink-2);width:74px;flex:0 0 auto;letter-spacing:-.005em}
+.console .actions{display:flex;gap:9px;flex-wrap:wrap;padding-top:4px}
+.console .note{font-size:12.5px;color:var(--ink-3);margin:0;letter-spacing:-.003em}
+
+/* ---------- 表单件 ---------- */
+input[type=text],input[type=url],input[type=password],select{
+  font:400 14px/1.4 var(--sans);letter-spacing:-.005em;
+  color:var(--ink);background:var(--bg);
+  border:1px solid var(--hair);border-radius:9px;
+  padding:9px 12px;min-width:0;flex:1 1 200px;
+  transition:border-color .18s, box-shadow .18s;
+}
+input:focus,select:focus{
+  outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 3.5px rgba(0,113,227,.14);
+}
+input[type=file]{
+  font:400 13px var(--sans);color:var(--ink-2);flex:1 1 220px;
+}
+input[type=file]::file-selector-button{
+  font:500 13px var(--sans);color:var(--ink);background:var(--bg);
+  border:1px solid var(--hair);border-radius:8px;padding:7px 13px;margin-right:11px;cursor:pointer;
+  transition:background .18s;
+}
+input[type=file]::file-selector-button:hover{background:var(--tile)}
+
+.check{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:var(--ink-2);cursor:pointer;user-select:none}
+.check input{width:auto;flex:0 0 auto;accent-color:var(--accent);margin:0}
+
+/* ---------- 按钮：药丸 ---------- */
+button{
+  font:500 14px/1 var(--sans);letter-spacing:-.006em;
+  color:var(--ink);background:var(--bg);
+  border:1px solid var(--hair);border-radius:980px;
+  padding:9px 17px;cursor:pointer;white-space:nowrap;
+  transition:background .18s, border-color .18s, color .18s, transform .1s;
+}
+button:hover{background:var(--tile)}
+button:active{transform:scale(.975)}
+button:disabled{opacity:.38;cursor:default;transform:none}
+button:focus-visible,button:focus{outline:none;box-shadow:0 0 0 3.5px rgba(0,113,227,.22)}
+button.solid{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button.solid:hover{background:var(--accent-ink);border-color:var(--accent-ink)}
+button.quiet{border-color:transparent;background:transparent;color:var(--ink-2);padding:9px 12px}
+button.quiet:hover{background:var(--tile);color:var(--ink)}
+button.mini{font-size:12.5px;padding:7px 13px}
+button.danger{color:var(--err);border-color:color-mix(in srgb, var(--err) 30%, transparent)}
+button.danger:hover{background:var(--wash-err)}
+
+/* ---------- 分段导航 ---------- */
+.tabs{
+  position:sticky;top:52px;z-index:40;
+  display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;
+  padding:14px 0 12px;margin-bottom:8px;
+  background:color-mix(in srgb, var(--bg) 74%, transparent);
+  -webkit-backdrop-filter:saturate(180%) blur(20px);
+  backdrop-filter:saturate(180%) blur(20px);
+  border-bottom:1px solid var(--hair-soft);
+}
+.tabs::-webkit-scrollbar{display:none}
+.tabs a{
+  font-size:13px;color:var(--ink-2);text-decoration:none;white-space:nowrap;
+  padding:7px 13px;border-radius:980px;transition:background .18s,color .18s;
+  letter-spacing:-.005em;
+}
+.tabs a:hover{background:var(--tile);color:var(--ink)}
+.tabs a:focus-visible{outline:none;box-shadow:0 0 0 3.5px rgba(0,113,227,.22);color:var(--ink)}
+
+/* ---------- 分区 ---------- */
+/* 行内代码：次级底 + 等宽，不用边框 */
+code{
+  font:400 .855em/1.4 var(--mono);letter-spacing:0;
+  background:var(--tile);color:var(--ink-2);
+  padding:2px 6px;border-radius:5px;
+}
+
+.sec{padding:52px 0 8px;border-bottom:1px solid var(--hair-soft)}
+.sec:last-of-type{border-bottom:0}
+.sec-hd{display:flex;align-items:baseline;gap:13px;margin-bottom:6px}
+.sec-hd .num{
+  font:600 12px/1 var(--mono);color:var(--ink-3);letter-spacing:.04em;
+  padding-top:6px;
+}
+.sec-hd h2{margin:0;font-size:26px;line-height:1.2;font-weight:650;letter-spacing:-.022em}
+.sec-desc{margin:0 0 24px 38px;font-size:14.5px;color:var(--ink-2);max-width:64ch;letter-spacing:-.005em}
+
+.group{margin-left:38px;display:grid;gap:13px}
+.bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bar .lab{font-size:13px;color:var(--ink-3);flex:0 0 auto;letter-spacing:-.005em}
+
+/* 方法徽标：只上色不填底 */
+.verb{
+  font:600 11px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;
+  padding:5px 8px;border-radius:6px;background:var(--tile);color:var(--ink-2);
+}
+.verb.get{color:var(--ok)} .verb.post{color:var(--accent-ink)}
+.verb.put{color:var(--warn)} .verb.del{color:var(--err)} .verb.ws{color:#7b4fd8}
+@media (prefers-color-scheme:dark){.verb.ws{color:#b088ff}}
+
+/* ---------- 输出块 ---------- */
+.out{
+  margin:16px 0 0;padding:16px 18px;border-radius:12px;background:var(--tile);
+  font:400 12.5px/1.65 var(--mono);color:var(--ink-2);
+  max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  transition:color .2s;
+}
+.out:empty{display:none}
+.out.bad{color:var(--err);background:var(--wash-err)}
+.out:focus-visible{outline:none;box-shadow:0 0 0 3.5px rgba(0,113,227,.2)}
+.out::-webkit-scrollbar{width:9px;height:9px}
+.out::-webkit-scrollbar-thumb{background:var(--hair);border-radius:9px}
+.out::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- 自测表 ---------- */
+.tblwrap{margin:16px 0 0;border-top:1px solid var(--hair-soft)}
+table{width:100%;border-collapse:collapse;font-size:13px;letter-spacing:-.003em}
+th{
+  text-align:left;font-weight:600;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--ink-3);padding:11px 12px;border-bottom:1px solid var(--hair-soft);
+  position:sticky;top:0;background:var(--bg);
+}
+td{padding:11px 12px;border-bottom:1px solid var(--hair-soft);vertical-align:top}
+tbody tr:hover td{background:var(--bg-sub)}
+td.c-name{font-weight:500}
+td.c-name code{
+  display:inline-block;margin-top:3px;font:400 11.5px var(--mono);color:var(--ink-3);
+  letter-spacing:0;word-break:break-all;
+}
+td.c-ok{color:var(--ok);font-weight:600}
+td.c-no{color:var(--err);font-weight:600}
+td.c-dim{color:var(--ink-3);font-variant-numeric:tabular-nums}
+.verdict{
+  margin:20px 0 0;font-size:15px;font-weight:600;letter-spacing:-.01em;
+  display:flex;align-items:center;gap:9px;
+}
+.verdict .mark{font-size:16px}
+
+/* ---------- 页脚 ---------- */
+footer{
+  max-width:1080px;margin:0 auto;padding:44px 24px 60px;
+  border-top:1px solid var(--hair-soft);
+  font-size:12.5px;color:var(--ink-3);line-height:1.8;letter-spacing:-.003em;
+}
+
+
+/* ---------- 窄屏 ---------- */
+@media (max-width:720px){
+  html{scroll-padding-top:120px}
+  .nav-in{padding:0 18px;height:48px}
+  .nav .crumb,.nav .sep{display:none}
+  main{padding:0 18px 90px}
+  .hero{padding:48px 0 32px}
+  .lede{font-size:17px}
+  .sec{padding:40px 0 6px}
+  .sec-desc,.group{margin-left:0}
+  .sec-hd h2{font-size:22px}
+  .out{max-height:260px;font-size:12px}
+  .verb{display:none}
+  th:nth-child(1),td:nth-child(1),th:nth-child(5),td:nth-child(5){display:none}
+  /* 触控目标不小于 44px 高（Apple HIG 建议） */
+  button,button.mini{min-height:40px;padding:10px 17px}
+  button.mini{font-size:13px;padding:10px 14px}
+  input[type=text],input[type=url],input[type=password],select{min-height:40px}
+  .check{min-height:40px;padding:8px 0}
+  .check input{width:20px;height:20px}
+  .tabs a{padding:10px 15px}
+  .field > .k{width:100%;margin-bottom:-6px}
+  .bar .lab{width:100%}
+}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-in">
+    <span class="brand"><span class="glyph"></span>lite-server</span>
+    <span class="sep"></span>
+    <span class="crumb">API 测试台</span>
+    <span class="grow"></span>
+    <span class="chip" id="modeBadge"><span class="dot"></span><span class="t">探测中</span></span>
+    <span class="chip mono" id="tokenState">无 token</span>
+  </div>
+</nav>
+
+<main>
+
+  <header class="hero">
+    <p class="eyebrow">LiteServer · .NET 10</p>
+    <h1>一次点完所有接口。</h1>
+    <p class="lede">
+      14 个 HTTP 端点与 1 个 WebSocket 通道的可视化测试台。
+      每个按钮都带预期状态码校验，失败路径也在内。
+    </p>
+
+    <div class="console">
+      <div class="field">
+        <span class="k">Base URL</span>
+        <input type="text" id="baseUrl" value="" spellcheck="false">
+        <button class="mini quiet" id="btnResetBase">用当前地址</button>
+      </div>
+      <div class="field">
+        <span class="k">apiKey</span>
+        <input type="password" id="apiKey" value="lite-sample-secret" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="actions">
+        <button class="solid" id="btnLogin">登录换取 JWT</button>
+        <button id="btnMe">查看身份</button>
+        <button class="danger" id="btnLogout">登出并拉黑</button>
+        <button class="quiet" id="btnClearToken">清空 token</button>
+      </div>
+      <p class="note">页面加载后会用默认 apiKey 自动登录一次；token 存在 sessionStorage，关标签即失效。</p>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="分区导航">
+    <a href="#s1">鉴权</a>
+    <a href="#s2">健康与运行时</a>
+    <a href="#s3">任务</a>
+    <a href="#s4">文件</a>
+    <a href="#s5">实时流</a>
+    <a href="#s6">其它</a>
+    <a href="#s7">DI 与后台任务</a>
+    <a href="#s8">全量自测</a>
+  </nav>
+
+  <!-- ① 鉴权 -->
+  <section class="sec" id="s1">
+    <div class="sec-hd"><span class="num">01</span><h2>鉴权</h2></div>
+    <p class="sec-desc">用 apiKey 换 JWT，之后所有受保护端点都读 <code>Authorization</code> 头。登出会把当前 token 写入黑名单。</p>
+    <div class="group">
+      <pre class="out" id="out-auth" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ② 元信息 -->
+  <section class="sec" id="s2">
+    <div class="sec-hd"><span class="num">02</span><h2>健康与运行时</h2></div>
+    <p class="sec-desc">两个白名单端点，无需 token。运行时信息可确认当前跑的是 JIT 还是真 NativeAOT。</p>
+    <div class="group">
+      <div class="bar">
+        <button data-call="health"><span class="verb get">get</span>&nbsp;/api/health</button>
+        <button data-call="runtime"><span class="verb get">get</span>&nbsp;/api/runtime</button>
+      </div>
+      <pre class="out" id="out-meta" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ③ 任务 -->
+  <section class="sec" id="s3">
+    <div class="sec-hd"><span class="num">03</span><h2>任务</h2></div>
+    <p class="sec-desc">内存 CRUD，用来验证路径参数、JSON 体解析与自定义 405。</p>
+    <div class="group">
+      <div class="bar">
+        <button data-call="tasks-list"><span class="verb get">get</span>&nbsp;/api/tasks</button>
+        <span class="lab">title</span>
+        <input type="text" id="taskTitle" value="浏览器新建的任务">
+        <button data-call="tasks-create"><span class="verb post">post</span>&nbsp;新建</button>
+      </div>
+      <div class="bar">
+        <span class="lab">id</span>
+        <input type="text" id="taskId" value="t-1" style="flex:0 1 150px">
+        <button data-call="tasks-delete" class="danger"><span class="verb del">del</span>&nbsp;删除</button>
+        <button data-call="tasks-405" class="quiet">PUT 应 405</button>
+      </div>
+      <pre class="out" id="out-tasks" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ④ 文件 -->
+  <section class="sec" id="s4">
+    <div class="sec-hd"><span class="num">04</span><h2>文件</h2></div>
+    <p class="sec-desc">上传走 <code>SaveFileAsync</code> 流式落盘，文件名取自 <code>filename</code> 请求头；下载走 <code>SendFileAsync</code>。</p>
+    <div class="group">
+      <div class="bar">
+        <input type="file" id="fileInput">
+        <button data-call="upload"><span class="verb post">post</span>&nbsp;上传</button>
+      </div>
+      <div class="bar">
+        <span class="lab">name</span>
+        <input type="text" id="fileName" value="sample.txt" style="flex:0 1 220px">
+        <label class="check"><input type="checkbox" id="fileAttach">强制下载</label>
+        <button data-call="download"><span class="verb get">get</span>&nbsp;下载</button>
+      </div>
+      <div class="bar">
+        <button data-call="download-missing" class="quiet">不存在的文件 · 应 404</button>
+        <button data-call="download-traversal" class="quiet">路径穿越 · 应 400</button>
+      </div>
+      <pre class="out" id="out-files" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ⑤ 实时 -->
+  <section class="sec" id="s5">
+    <div class="sec-hd"><span class="num">05</span><h2>实时流</h2></div>
+    <p class="sec-desc">SSE、分块长连接、WebSocket 三条通道。浏览器原生 <code>EventSource</code> 与 <code>WebSocket</code> 都无法设请求头，故测试页靠 <code>?token=</code> 过鉴权。</p>
+    <div class="group">
+      <div class="bar">
+        <span class="lab">count</span>
+        <input type="text" id="streamCount" value="5" style="flex:0 1 80px">
+        <button data-call="sse" id="btnSse"><span class="verb get">get</span>&nbsp;SSE</button>
+        <button data-call="chunk"><span class="verb get">get</span>&nbsp;分块长连接</button>
+        <button class="quiet mini" id="btnSseStop" disabled>停止</button>
+      </div>
+      <div class="bar">
+        <span class="lab">消息</span>
+        <input type="text" id="wsMsg" value="hello ws">
+        <button data-call="ws" id="btnWs"><span class="verb ws">ws</span>&nbsp;连接</button>
+        <button class="quiet mini" id="btnWsSend" disabled>发一条</button>
+        <button class="quiet mini" id="btnWsClose" disabled>断开</button>
+      </div>
+      <pre class="out" id="out-live" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ⑥ 其它 -->
+  <section class="sec" id="s6">
+    <div class="sec-hd"><span class="num">06</span><h2>Cookie、上游与静态文件</h2></div>
+    <p class="sec-desc">Cookie 下发与复用、<code>HttpClient</code> 上游探活、静态资源与 dotfile 防护。</p>
+    <div class="group">
+      <div class="bar">
+        <button data-call="cookie"><span class="verb get">get</span>&nbsp;/api/cookie</button>
+      </div>
+      <div class="bar">
+        <span class="lab">上游</span>
+        <input type="url" id="upstreamUrl" value="" spellcheck="false">
+        <button data-call="upstream">探活</button>
+        <button data-call="upstream-bad" class="quiet">非法 URL · 应 400</button>
+      </div>
+      <div class="bar">
+        <span class="lab">静态</span>
+        <input type="text" id="staticPath" value="/" style="flex:0 1 160px">
+        <button data-call="static">取资源</button>
+        <button data-call="static-hidden" class="quiet">dotfile · 应 403</button>
+      </div>
+      <pre class="out" id="out-misc" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ⑦ 依赖注入与后台任务 -->
+  <section class="sec" id="s7">
+    <div class="sec-hd"><span class="num">07</span><h2>依赖注入与后台任务</h2></div>
+    <p class="sec-desc">
+      验证三种生命周期（Singleton / Scoped / Transient）与每请求作用域隔离，
+      以及由 <code>BackgroundService</code> 承载的后台任务——全部在 NativeAOT 下工作。
+    </p>
+    <div class="group">
+      <div class="bar">
+        <button data-call="di">探测 DI 生命周期</button>
+        <button data-call="di-log" class="quiet">验证 ILogger 注入</button>
+      </div>
+      <div class="bar">
+        <span class="lab">步骤</span>
+        <input type="text" id="jobSteps" value="10" style="flex:0 1 70px">
+        <span class="lab">每步延迟(ms)</span>
+        <input type="text" id="jobDelay" value="150" style="flex:0 1 90px">
+        <button class="solid" data-call="job-create">创建后台任务</button>
+        <button data-call="job-list" class="quiet">任务列表</button>
+        <button class="danger" data-call="job-cancel">取消最新</button>
+      </div>
+      <div class="bar">
+        <span class="lab">轮询</span>
+        <input type="text" id="jobId" placeholder="任务 id（创建后自动填入）" style="flex:1 1 220px">
+        <button data-call="job-get">查询单个</button>
+        <label class="check"><input type="checkbox" id="jobAuto" checked>自动轮询</label>
+      </div>
+      <pre class="out" id="out-di" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ⑧ 全量自测 -->
+  <section class="sec" id="s8">
+    <div class="sec-hd"><span class="num">08</span><h2>全量自测</h2></div>
+    <p class="sec-desc">23 项断言，覆盖全部端点与失败路径，含一条 WebSocket 回声。逐项比对实际状态码与预期。</p>
+    <div class="group">
+      <div class="bar">
+        <button class="solid" id="btnRunAll">运行全部用例</button>
+        <span class="lab">约需 3 秒</span>
+      </div>
+      <div class="tblwrap"><table id="tbl"></table></div>
+      <p class="verdict" id="out-all"></p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div>lite-server · LiteServer · .NET 10 NativeAOT 验证工程</div>
+  <div>静态资源由 <code>AddStaticFiles</code> 托管，禁用一切 dotfile 访问。</div>
+</footer>
+
+<script>
+"use strict";
+
+/* ---------------- 状态 ---------------- */
+const S = { base: "", token: "", sse: null, ws: null };
+const $ = id => document.getElementById(id);
+
+function savedToken() {
+  try { return sessionStorage.getItem("sf_token") || ""; } catch { return ""; }
+}
+
+function setToken(t) {
+  S.token = t || "";
+  try { t ? sessionStorage.setItem("sf_token", t) : sessionStorage.removeItem("sf_token"); } catch {}
+  $("tokenState").textContent = t ? t.slice(0, 10) + "…" : "无 token";
+}
+
+function normBase(v) {
+  let b = (v || "").trim().replace(/\/+$/, "");
+  return b || location.origin;
+}
+
+const base = () => S.base;
+const url = p => base() + p;
+
+/* ---------------- 输出 ---------------- */
+function show(id, text, bad) {
+  const node = $(id);
+  if (!node) return;
+  node.textContent = text;
+  node.classList.toggle("bad", !!bad);
+}
+
+function brief(obj, max = 1400) {
+  let s;
+  try { s = typeof obj === "string" ? obj : JSON.stringify(obj, null, 2); }
+  catch { s = String(obj); }
+  return s.length > max ? s.slice(0, max) + "\n… 已截断（共 " + s.length + " 字符）" : s;
+}
+
+/* ---------------- 请求核心 ---------------- */
+async function call(method, path, { body, headers, expect, raw, useQueryToken } = {}) {
+  const h = Object.assign({}, headers || {});
+  if (S.token && !useQueryToken) h["Authorization"] = "Bearer " + S.token;
+
+  let finalPath = path;
+  if (useQueryToken && S.token) {
+    finalPath += (finalPath.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(S.token);
+  }
+
+  const init = { method, headers: h };
+  if (body !== undefined && body !== null) {
+    // 二进制体必须原样透传：ArrayBuffer/Blob 走 JSON.stringify 会被压成 "{}"
+    const isRaw = body instanceof ArrayBuffer || ArrayBuffer.isView(body) ||
+                  body instanceof Blob || body instanceof FormData;
+    if (typeof body === "string" || isRaw) {
+      init.body = body;
+    } else {
+      init.body = JSON.stringify(body);
+      h["Content-Type"] ??= "application/json";
+    }
+  }
+
+  const t0 = performance.now();
+  try {
+    const res = await fetch(url(finalPath), init);
+    const ms = Math.round(performance.now() - t0);
+    const text = await res.text();
+    let parsed = text;
+    try { parsed = JSON.parse(text); } catch {}
+    const ok = expect ? res.status === expect : res.ok;
+    return { ok, status: res.status, ms, text, parsed, headers: res.headers, finalPath };
+  } catch (e) {
+    return {
+      ok: false, status: 0, ms: Math.round(performance.now() - t0),
+      text: String(e && e.message || e), parsed: String(e), err: true, finalPath,
+    };
+  }
+}
+
+function render(outId, r, extra = "") {
+  const head = `${r.status || "ERR"} · ${r.ms} ms · ${r.ok ? "符合预期" : "不符预期"}`;
+  show(outId, [head, r.finalPath, extra, brief(r.parsed)].filter(Boolean).join("\n"), !r.ok);
+  return r;
+}
+
+/* ---------------- ① 鉴权 ---------------- */
+async function doLogin() {
+  const r = await call("POST", "/api/login", { body: { apiKey: $("apiKey").value }, expect: 200 });
+  if (r.ok && r.parsed && r.parsed.token) setToken(r.parsed.token);
+  render("out-auth", r, r.ok ? "token 已存入 sessionStorage" : "");
+  refreshMode();
+}
+
+async function refreshMode() {
+  const r = await call("GET", "/api/runtime", { expect: 200 });
+  const badge = $("modeBadge");
+  let label = "未知";
+  if (r.ok && r.parsed && r.parsed.data) {
+    const m = /isNativeAot=(\w+)/.exec(r.parsed.data);
+    if (m) label = m[1] === "True" ? "NativeAOT" : "JIT";
+  }
+  badge.querySelector(".t").textContent = label;
+  badge.classList.toggle("live", label === "NativeAOT");
+  badge.classList.toggle("warn", label === "JIT");
+}
+
+const doMe = async () => render("out-auth", await call("GET", "/api/me", { expect: 200 }));
+
+async function doLogout() {
+  if (!S.token) return show("out-auth", "先登录拿到 token，再拉黑。", true);
+  const r = await call("POST", "/api/logout", { headers: { "Content-Length": "0" }, expect: 200 });
+  render("out-auth", r, "拉黑后 /api/me 应为 401");
+  if (r.ok) {
+    const after = await call("GET", "/api/me", { expect: 401 });
+    show("out-auth",
+      brief(r.parsed) + `\n\n拉黑后 /api/me → ${after.status}` +
+      (after.ok ? "（符合预期）" : "（异常：仍可访问）"), !after.ok);
+  }
+}
+
+/* ---------------- ② 元信息 ---------------- */
+const doMeta = async kind =>
+  render("out-meta", await call("GET", kind === "health" ? "/api/health" : "/api/runtime", { expect: 200 }));
+
+/* ---------------- ③ 任务 ---------------- */
+async function doTasks(kind) {
+  let r;
+  if (kind === "tasks-list") {
+    r = await call("GET", "/api/tasks", { expect: 200 });
+  } else if (kind === "tasks-create") {
+    r = await call("POST", "/api/tasks", { body: { title: $("taskTitle").value || "未命名" }, expect: 201 });
+    if (r.ok && r.parsed && r.parsed.id) $("taskId").value = r.parsed.id;
+  } else if (kind === "tasks-delete") {
+    r = await call("DELETE", "/api/tasks/" + encodeURIComponent($("taskId").value.trim()), { expect: 200 });
+  } else {
+    r = await call("PUT", "/api/tasks", { headers: { "Content-Length": "0" }, expect: 405 });
+  }
+  render("out-tasks", r);
+}
+
+/* ---------------- ④ 文件 ---------------- */
+async function doUpload() {
+  const f = $("fileInput").files[0];
+  if (!f) return show("out-files", "先选一个文件。", true);
+  const buf = await f.arrayBuffer();
+  const r = await call("POST", "/api/upload", {
+    body: buf,
+    headers: { "filename": f.name, "Content-Type": "application/octet-stream" },
+    expect: 200,
+  });
+  if (r.ok) $("fileName").value = f.name;
+  render("out-files", r, `上传 ${f.name}（${f.size} 字节）`);
+}
+
+async function doDownload(kind) {
+  if (kind === "download-traversal") {
+    return render("out-files",
+      await call("GET", "/api/download?name=" + encodeURIComponent("../../etc/passwd"), { expect: 400 }),
+      "路径穿越应被拒");
+  }
+  if (kind === "download-missing") {
+    return render("out-files", await call("GET", "/api/download?name=__nope__.txt", { expect: 404 }));
+  }
+
+  const name = encodeURIComponent($("fileName").value.trim() || "sample.txt");
+  const attach = $("fileAttach").checked ? "&attach=1" : "";
+  const h = S.token ? { "Authorization": "Bearer " + S.token } : {};
+  const t0 = performance.now();
+  try {
+    const res = await fetch(url(`/api/download?name=${name}${attach}`), { headers: h });
+    const ms = Math.round(performance.now() - t0);
+    if (!res.ok) {
+      return render("out-files", {
+        ok: false, status: res.status, ms,
+        finalPath: `/api/download?name=${name}${attach}`, parsed: await res.text(),
+      });
+    }
+    const blob = await res.blob();
+    show("out-files",
+      `200 · ${ms} ms · 符合预期\n/api/download?name=${name}${attach}\n` +
+      `Content-Type: ${res.headers.get("content-type")}\n` +
+      `Content-Disposition: ${res.headers.get("content-disposition") || "（无）"}\n` +
+      `Accept-Ranges: ${res.headers.get("accept-ranges") || "（无）"}\n` +
+      `大小: ${blob.size} 字节`);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = decodeURIComponent(name);
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } catch (e) {
+    show("out-files", "请求失败：" + e.message, true);
+  }
+}
+
+/* ---------------- ⑤ 实时 ---------------- */
+async function doSse() {
+  if (S.sse) { S.sse.close(); S.sse = null; }
+  const count = $("streamCount").value.trim() || "5";
+  const path = `/api/events?count=${encodeURIComponent(count)}`;
+  const full = S.token ? url(path + "&token=" + encodeURIComponent(S.token)) : url(path);
+
+  const t0 = performance.now();
+  const lines = ["连接中…", full];
+  show("out-live", lines.join("\n"));
+
+  const es = new EventSource(full);
+  S.sse = es;
+  $("btnSseStop").disabled = false;
+
+  const finish = note => {
+    try { es.close(); } catch {}
+    S.sse = null;
+    $("btnSseStop").disabled = true;
+    show("out-live", [`SSE ${note} · ${Math.round(performance.now() - t0)} ms`, full, "", ...lines.slice(2)].join("\n"),
+      note.includes("失败"));
+  };
+
+  es.addEventListener("tick", ev => {
+    lines.push("tick · " + ev.data);
+    show("out-live", lines.join("\n"));
+  });
+  es.addEventListener("done", ev => {
+    lines.push("done · " + ev.data);
+    finish("完成");
+  });
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) finish(lines.length > 2 ? "已关闭" : "失败（可能 401：先登录）");
+  };
+  setTimeout(() => { if (S.sse === es) finish("超时收尾"); }, (Number(count) || 5) * 500 + 4000);
+}
+
+async function doChunk() {
+  const count = $("streamCount").value.trim() || "3";
+  const r = await call("GET", "/api/chunk?count=" + encodeURIComponent(count), { expect: 200 });
+  show("out-live", `${r.status} · ${r.ms} ms · ${r.ok ? "符合预期" : "不符预期"}\n${r.finalPath}\n\n${r.text}`, !r.ok);
+}
+
+function wsUrl() {
+  const u = new URL(base());
+  const q = S.token ? "?token=" + encodeURIComponent(S.token) : "";
+  return `${u.protocol === "https:" ? "wss:" : "ws:"}//${u.host}/ws${q}`;
+}
+
+function doWs() {
+  if (S.ws) { try { S.ws.close(); } catch {} S.ws = null; }
+  if (!S.token) return show("out-live", "WebSocket 需鉴权，请先登录。", true);
+
+  const log = ["连接 " + wsUrl()];
+  show("out-live", log.join("\n"));
+
+  let ws;
+  try { ws = new WebSocket(wsUrl()); }
+  catch (e) { return show("out-live", log.join("\n") + "\n构造失败：" + e.message, true); }
+  S.ws = ws;
+
+  ws.onopen = () => {
+    log.push("已连接");
+    $("btnWsSend").disabled = false;
+    $("btnWsClose").disabled = false;
+    show("out-live", log.join("\n"));
+  };
+  ws.onmessage = ev => {
+    log.push("← " + ev.data);
+    show("out-live", log.join("\n"));
+  };
+  ws.onerror = () => log.push("错误（常见原因：token 失效或未登录）");
+  ws.onclose = ev => {
+    log.push(`连接关闭 · code ${ev.code}`);
+    $("btnWsSend").disabled = true;
+    $("btnWsClose").disabled = true;
+    S.ws = null;
+    show("out-live", log.join("\n"));
+  };
+}
+
+function wsSend() {
+  if (!S.ws || S.ws.readyState !== WebSocket.OPEN) return;
+  const m = $("wsMsg").value || "ping";
+  S.ws.send(m);
+  show("out-live", ($("out-live").textContent || "") + "\n→ " + m);
+}
+
+/* ---------------- ⑥ 其它 ---------------- */
+async function doCookie() {
+  const r1 = await call("GET", "/api/cookie", { expect: 200 });
+  const r2 = await call("GET", "/api/cookie", { expect: 200 });
+  // Set-Cookie 是禁止响应头，cookie 又是 HttpOnly —— JS 两者都读不到，
+  // 故以两次返回的 sid 是否一致来判定复用。
+  const sidOf = r => (r.parsed && typeof r.parsed.data === "string") ? (r.parsed.data.split("=")[1] || "") : "";
+  const s1 = sidOf(r1), s2 = sidOf(r2);
+  const reused = s1 && s1 === s2;
+  const ok = r1.ok && r2.ok && reused;
+  show("out-misc",
+    `第 1 次 ${r1.status} · sid ${s1 || "?"}（应下发新 sid）\n` +
+    `第 2 次 ${r2.status} · sid ${s2 || "?"}（应复用同一 sid）\n` +
+    `判定：${reused ? "浏览器已回传 cookie，服务端复用" : "sid 不一致，cookie 未生效"}\n` +
+    `注：Set-Cookie 为禁止响应头、cookie 为 HttpOnly，JS 均不可见。\n\n` +
+    brief(r1.parsed, 300), !ok);
+}
+
+async function doUpstream(kind) {
+  const bad = kind === "upstream-bad";
+  const target = bad ? "ftp://example.com/x" : ($("upstreamUrl").value.trim() || url("/api/health"));
+  render("out-misc",
+    await call("GET", "/api/upstream?url=" + encodeURIComponent(target), { expect: bad ? 400 : 200 }),
+    "目标：" + target);
+}
+
+async function doStatic(kind) {
+  const hidden = kind === "static-hidden";
+  const p = hidden ? "/.canary" : ($("staticPath").value.trim() || "/");
+  const expect = hidden ? 403 : 200;
+  const t0 = performance.now();
+  const res = await fetch(url(p), { headers: S.token ? { "Authorization": "Bearer " + S.token } : {} });
+  const ms = Math.round(performance.now() - t0);
+  const txt = (await res.text()).slice(0, 400);
+  const ok = res.status === expect;
+  show("out-misc",
+    `${res.status} · ${ms} ms · ${ok ? "符合预期" : "不符预期"}\n${p}\n` +
+    `Content-Type: ${res.headers.get("content-type")}\n\n${txt}`, !ok);
+}
+
+/* ---------------- ⑦ 依赖注入与后台任务 ---------------- */
+let jobTimer = null;
+
+async function doDi() {
+  const r = await call("GET", "/api/di", { expect: 200 });
+  if (!r.ok) return render("out-di", r);
+
+  const d = r.parsed;
+  show("out-di",
+    `200 · ${r.ms} ms · 符合预期\n/api/di\n\n` +
+    `Singleton  ${d.singletonId}  累计解析 ${d.singletonResolveCount} 次\n` +
+    `Scoped     ${d.scopedId}   （本次请求作用域）\n` +
+    `Transient  ${d.transientId}\n\n` +
+    (d.notes || []).join("\n") +
+    `\n\n判定: Scoped同请求复用=${d.scopedIsFreshPerRequest}  Transient每次新建=${d.transientIsAlwaysNew}`);
+}
+
+async function doDiLog() {
+  const r = await call("GET", "/api/di/log", { expect: 200 });
+  render("out-di", r, "服务端控制台应出现对应日志行");
+}
+
+async function doJobCreate() {
+  const steps = $("jobSteps").value.trim() || "10";
+  const delayMs = $("jobDelay").value.trim() || "150";
+  const r = await call("POST", "/api/jobs", {
+    body: { name: "页面创建的任务", steps: Number(steps), stepDelayMs: Number(delayMs) },
+    expect: 201,
+  });
+  if (!r.ok) return render("out-di", r);
+  $("jobId").value = r.parsed.id;
+  show("out-di", `201 · ${r.ms} ms · 已创建\nid=${r.parsed.id}  state=${r.parsed.state}\n${r.parsed.location}`);
+  if ($("jobAuto").checked) startJobPolling(r.parsed.id);
+}
+
+async function doJobGet() {
+  const id = $("jobId").value.trim();
+  if (!id) return show("out-di", "先填任务 id，或先创建一个任务。", true);
+  const r = await call("GET", "/api/jobs/" + encodeURIComponent(id), { expect: 200 });
+  if (!r.ok) return render("out-di", r);
+  showJob(r.parsed, r.ms, id);
+  return r.parsed;
+}
+
+function showJob(j, ms, id) {
+  const stateName = ["入队", "运行中", "已完成", "失败", "已取消"][j.state] ?? j.state;
+  const bar = "█".repeat(Math.round(j.progress / 5)).padEnd(20, "·");
+  show("out-di",
+    `GET /api/jobs/${id} · ${ms ?? "-"} ms\n` +
+    `${bar} ${j.progress}%\n` +
+    `状态: ${stateName}   ${j.message || ""}\n` +
+    `创建于作用域: ${j.createdInScope ?? "-"}   耗时: ${j.durationMs ?? "-"} ms` +
+    (j.error ? `\n错误: ${j.error}` : ""));
+}
+
+function startJobPolling(id) {
+  stopJobPolling();
+  let ticks = 0;
+  jobTimer = setInterval(async () => {
+    const r = await call("GET", "/api/jobs/" + encodeURIComponent(id), { expect: 200 });
+    if (!r.ok) { stopJobPolling(); return render("out-di", r); }
+    showJob(r.parsed, r.ms, id);
+    // 终态或超时即停
+    if (r.parsed.state === 2 || r.parsed.state === 3 || r.parsed.state === 4 || ++ticks > 120) stopJobPolling();
+  }, 400);
+}
+
+function stopJobPolling() {
+  if (jobTimer) { clearInterval(jobTimer); jobTimer = null; }
+}
+
+async function doJobList() {
+  const r = await call("GET", "/api/jobs?limit=10", { expect: 200 });
+  if (!r.ok) return render("out-di", r);
+  const items = r.parsed.items || [];
+  const lines = items.map(j => {
+    const stateName = ["入队", "运行中", "已完成", "失败", "已取消"][j.state] ?? j.state;
+    return `  ${j.id.padEnd(8)} ${stateName.padEnd(5)} ${String(j.progress).padStart(3)}%  ${j.name}`;
+  });
+  show("out-di", `200 · ${r.ms} ms · 共 ${r.parsed.total} 个任务\n\n` + (lines.join("\n") || "（暂无）"));
+}
+
+async function doJobCancel() {
+  const id = $("jobId").value.trim();
+  if (!id) return show("out-di", "先填任务 id。", true);
+  const r = await call("DELETE", "/api/jobs/" + encodeURIComponent(id), { expect: 200 });
+  render("out-di", r, "取消请求已发出");
+}
+
+/* ---------------- ⑦ 全量自测 ---------------- */
+const CASES = [
+  ["health 存活", "GET", "/api/health", 200, false],
+  ["runtime 元信息", "GET", "/api/runtime", 200, false],
+  ["login 错误 key", "POST", "/api/login", 401, false, () => JSON.stringify({ apiKey: "wrong" })],
+  ["login 坏 JSON", "POST", "/api/login", 400, false, () => "{bad"],
+  ["login 正确", "POST", "/api/login", 200, false, () => JSON.stringify({ apiKey: "lite-sample-secret" })],
+  ["me 无 token", "GET", "/api/me", 401, false, null, { noToken: true }],
+  ["me 有效 token", "GET", "/api/me", 200, true],
+  ["tasks 列表", "GET", "/api/tasks", 200, true],
+  ["tasks 新建", "POST", "/api/tasks", 201, true, () => JSON.stringify({ title: "自测任务" })],
+  ["tasks 空 title", "POST", "/api/tasks", 400, true, () => JSON.stringify({})],
+  ["tasks 方法不允许", "PUT", "/api/tasks", 405, true],
+  ["tasks 删除不存在", "DELETE", "/api/tasks/__nope__", 404, true],
+  ["upstream 非法 url", "GET", "/api/upstream?url=ftp%3A%2F%2Fx", 400, true],
+  ["upstream 自探活", "GET", "/api/upstream?url=", 200, true, null, { dynamic: true }],
+  ["download 路径穿越", "GET", "/api/download?name=..%2F..%2Fetc%2Fpasswd", 400, true],
+  ["download 不存在", "GET", "/api/download?name=__nope__.txt", 404, true],
+  ["chunk 长连接", "GET", "/api/chunk?count=2", 200, true],
+  ["cookie 读写", "GET", "/api/cookie", 200, true],
+  ["静态首页", "GET", "/", 200, false],
+  ["静态 dotfile", "GET", "/.canary", 403, false],
+  ["未知路由 404", "GET", "/api/definitely-not-here", 404, true],
+  ["health 方法不允许", "POST", "/api/health", 405, false],
+];
+
+async function runAll() {
+  const tbl = $("tbl");
+  tbl.innerHTML = "<thead><tr><th>#</th><th>用例</th><th>期望</th><th>实际</th><th>耗时</th><th>结果</th></tr></thead><tbody></tbody>";
+  const tbody = tbl.querySelector("tbody");
+  const btn = $("btnRunAll");
+  btn.disabled = true;
+  show("out-all", "");
+  $("out-all").classList.remove("bad");
+
+  if (!S.token) {
+    const r = await call("POST", "/api/login", { body: { apiKey: $("apiKey").value || "lite-sample-secret" } });
+    if (r.ok && r.parsed.token) setToken(r.parsed.token);
+  }
+
+  let pass = 0, fail = 0;
+  const addRow = (i, name, path, expect, status, ms, ok, note) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td class="c-dim">${i}</td>` +
+      `<td class="c-name">${name}<br><code>${path}</code></td>` +
+      `<td class="c-dim">${expect}</td>` +
+      `<td class="c-dim">${status || "ERR"}</td>` +
+      `<td class="c-dim">${ms} ms</td>` +
+      `<td class="${ok ? "c-ok" : "c-no"}">${ok ? "通过" : "失败" + (note ? " · " + note : "")}</td>`;
+    tbody.appendChild(tr);
+  };
+
+  for (let i = 0; i < CASES.length; i++) {
+    const [name, method, path, expect, needTok, bodyFn, opts] = CASES[i];
+    let finalPath = path;
+    if (opts && opts.dynamic) finalPath = path + encodeURIComponent(url("/api/health"));
+
+    const h = {};
+    if (needTok && S.token && !(opts && opts.noToken)) h["Authorization"] = "Bearer " + S.token;
+    if (method === "POST" || method === "PUT") h["Content-Length"] = "0";
+
+    const init = { method, headers: h };
+    if (bodyFn) { init.body = bodyFn(); h["Content-Type"] = "application/json"; }
+
+    const t0 = performance.now();
+    let status = 0, note = "";
+    try {
+      const res = await fetch(url(finalPath), init);
+      status = res.status;
+      await res.text();
+    } catch (e) { note = e.message; }
+    const ms = Math.round(performance.now() - t0);
+    const ok = status === expect;
+    ok ? pass++ : fail++;
+    addRow(i + 1, name, `${method} ${finalPath.slice(0, 64)}`, expect, status, ms, ok, note);
+  }
+
+  if (S.token) {
+    const wsResult = await new Promise(resolve => {
+      const u = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws?token=${encodeURIComponent(S.token)}`;
+      let ws, done = false;
+      const finish = v => { if (!done) { done = true; try { ws && ws.close(); } catch {} resolve(v); } };
+      try { ws = new WebSocket(u); } catch (e) { return resolve({ ok: false, note: e.message }); }
+      ws.onopen = () => setTimeout(() => ws.send("selftest"), 200);
+      ws.onmessage = ev => finish({ ok: String(ev.data).includes("selftest") });
+      ws.onerror = () => finish({ ok: false, note: "握手失败" });
+      setTimeout(() => finish({ ok: false, note: "超时" }), 5000);
+    });
+    wsResult.ok ? pass++ : fail++;
+    addRow(CASES.length + 1, "WebSocket 回声", "WS /ws?token=…", "echo", "-", "-", wsResult.ok, wsResult.note);
+  }
+
+  const total = pass + fail;
+  const verdict = $("out-all");
+  verdict.innerHTML = `<span class="mark">${fail === 0 ? "✓" : "✕"}</span>` +
+    `${total} 项 · 通过 ${pass} · 失败 ${fail}`;
+  verdict.classList.toggle("bad", fail !== 0);
+  btn.disabled = false;
+}
+
+/* ---------------- 事件绑定 ---------------- */
+const DISPATCH = {
+  health: () => doMeta("health"),
+  runtime: () => doMeta("runtime"),
+  "tasks-list": () => doTasks("tasks-list"),
+  "tasks-create": () => doTasks("tasks-create"),
+  "tasks-delete": () => doTasks("tasks-delete"),
+  "tasks-405": () => doTasks("tasks-405"),
+  upload: doUpload,
+  download: () => doDownload("download"),
+  "download-missing": () => doDownload("download-missing"),
+  "download-traversal": () => doDownload("download-traversal"),
+  sse: doSse,
+  chunk: doChunk,
+  ws: doWs,
+  cookie: doCookie,
+  upstream: () => doUpstream("upstream"),
+  "upstream-bad": () => doUpstream("upstream-bad"),
+  static: () => doStatic("static"),
+  "static-hidden": () => doStatic("static-hidden"),
+  di: doDi,
+  "di-log": doDiLog,
+  "job-create": doJobCreate,
+  "job-get": doJobGet,
+  "job-list": doJobList,
+  "job-cancel": doJobCancel,
+};
+
+document.addEventListener("click", e => {
+  const btn = e.target.closest("[data-call]");
+  if (!btn) return;
+  const fn = DISPATCH[btn.dataset.call];
+  if (fn) fn();
+});
+
+$("btnLogin").onclick = doLogin;
+$("btnMe").onclick = doMe;
+$("btnLogout").onclick = doLogout;
+$("btnClearToken").onclick = () => { setToken(""); show("out-auth", "已清空 token。"); };
+$("btnResetBase").onclick = () => { $("baseUrl").value = location.origin; S.base = normBase(location.origin); };
+$("btnSseStop").onclick = () => {
+  if (S.sse) { S.sse.close(); S.sse = null; $("btnSseStop").disabled = true; show("out-live", "已手动停止。"); }
+};
+$("btnWsSend").onclick = wsSend;
+$("btnWsClose").onclick = () => { if (S.ws) S.ws.close(); };
+$("btnRunAll").onclick = runAll;
+$("baseUrl").onchange = () => { S.base = normBase($("baseUrl").value); $("baseUrl").value = S.base; };
+
+/* ---------------- 初始化 ---------------- */
+(function init() {
+  S.base = normBase(location.origin);
+  $("baseUrl").value = S.base;
+  $("upstreamUrl").value = S.base + "/api/health";
+  setToken(savedToken());
+  refreshMode();
+  if (!S.token) doLogin();
+})();
+</script>
+</body>
+</html>
