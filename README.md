@@ -9,13 +9,15 @@ server.MapGet("/hello", (req, res) => res.WriteAsync("Hello LiteServer"));
 await server.StartAsync("127.0.0.1", 8090);
 ```
 
-## 设计取向
+## 来源说明
 
-LiteServer 是原创实现。它在能力边界上参考了同类轻量 HttpListener 框架的公开经验
-（包括社区文档、公开 API 形态，以及在真实项目中对这类框架的实测结论），
-但**代码全部重写**，不含任何第三方实现。
+LiteServer 的能力边界参考了 **PicoServer**（作者 juziyu，https://picoserver.cn/）——
+包括其公开文档、NuGet 包对外暴露的 API 形态，以及在实际项目中对它的行为实测结论。
 
-下述设计取向构成了本项目的骨架：
+**代码是独立重写的**：本仓库不含 PicoServer 的任何反编译产物或原始实现，全部源码为原创。
+PicoServer 的名称与实现归原作者所有，本项目与其无隶属或授权关系。
+
+下述设计取向构成了本项目的骨架（均为公开可见的架构方法，非代码搬运）：
 
 | 取向 | 说明 |
 |---|---|
@@ -27,9 +29,9 @@ LiteServer 是原创实现。它在能力边界上参考了同类轻量 HttpList
 | ETag 指纹 | 由「修改时间刻度 + 文件长度」构成，无需读内容 |
 | accept 循环退避 | 异常后先查 `IsListening`，避免故障时空转打满 CPU |
 
-## 与常见轻量框架的差异
+## 相对 PicoServer 的改进
 
-这些是 LiteServer 重新设计、而非照搬的地方：
+在完整对齐其能力的前提下，这些是 LiteServer 重新设计、而非沿用其做法的地方：
 
 - **同路径可注册多个方法**。常见做法是以路径为唯一键存处理器，第二个注册会被静默忽略；
   本项目的路由表以 (路径, 方法) 为组合键，GET/POST/PUT/DELETE 可共存。
