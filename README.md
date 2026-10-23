@@ -150,6 +150,53 @@ server.MapGet("/api/di", (req, res) =>
 | `GET /api/di/log` | `ILogger<T>` 构造函数注入在 AOT 下可用 |
 | `GET/POST/DELETE /api/jobs[/{id}]` | 后台任务创建、进度轮询、取消，由 `BackgroundService` 承载 |
 
+## 性能
+
+仓库带两个压测脚本（依赖 [hey](https://github.com/rakyll/hey)）：
+
+```bash
+./tools/bench.sh                        # 分路径压测，多轮取中位数
+./tools/bench-ab.sh                     # JIT vs NativeAOT 对照
+```
+
+### 参考数据
+
+macOS arm64（Apple Silicon，10 核），每轮 2000 请求、并发 50、3 轮取中位数：
+
+| 路径 | AOT | JIT | 说明 |
+|---|---|---|---|
+| `GET /api/health` | ~48,700 req/s | ~32,900 req/s | 纯路由基线 |
+| `GET` 未命中路由 | ~43,800 req/s | ~27,400 req/s | 路由查找失败路径 |
+| `GET /tiny.txt` | ~27,500 req/s | ~20,300 req/s | 静态文件（含 stat + 文件流） |
+| `GET /api/me` | ~43,900 req/s | ~27,600 req/s | 含 HMAC-SHA256 验签 |
+| `GET /api/di` | ~41,400 req/s | ~24,500 req/s | 含 DI 作用域创建与构造注入 |
+| `/api/health` 禁用 keepalive | ~19,700 req/s | ~18,600 req/s | 长连接贡献约 2.5 倍吞吐 |
+
+单次测量的 P50 延迟约 1.7–2.2 ms，P99 约 4.5–6.3 ms。
+
+### 怎么读这些数字
+
+- **AOT 比 JIT 快**：本次测量中位数高出约 18%–48%（不同轮次差异较大），
+  主要来自消除 JIT 编译与启动期预热。
+- **health 与 404 接近** → 路由查找本身开销很小，不是瓶颈。
+- **static 约为 health 的 55%** → 差额主要在文件 `open`/`read` 与 `stat`，属正常成本。
+- **JWT 与 health 接近** → HS256 验签在微秒级，不构成瓶颈。
+- **关掉 keepalive 吞吐腰斩** → 瓶颈在 TCP 建连，而不是应用逻辑。
+
+### 一个被否决的优化（记录在此以免重犯）
+
+曾尝试给静态文件加「路径 → 文件元数据」缓存，期望省掉 `GetFullPath` + `new FileInfo`。
+微基准显示这两步约 1.96 µs/次，看似可观，但**端到端压测中无可测收益**：
+
+```
+基线       7256 req/s   (并发 1，中位数)
+优化后     7260 req/s   (同并发，中位数)
+```
+
+原因：这部分开销被 socket I/O 与线程调度掩盖了。更严重的是，缓存元数据会带来
+**ETag 陈旧 bug**——文件从 4 字节改成 11 字节后 ETag 未变，客户端收到 304 而继续读旧内容。
+该改动已整体回退。教训：**微基准的收益必须用端到端测量验证，且缓存协商头绝不能缓存。**
+
 ## 能力清单
 
 | 类别 | 能力 |
