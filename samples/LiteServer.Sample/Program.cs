@@ -9,8 +9,6 @@ using Microsoft.Extensions.Logging;
 using LiteServer.Sample.Di;
 using LiteServer.Sample.Jobs;
 using LiteServer.Sample.Push;
-using LiteServer.Security;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LiteServer.Sample;
 
