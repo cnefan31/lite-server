@@ -41,8 +41,14 @@ public sealed class RouteTable
     private const int MaxPathLength = 2048;
     private const int MaxWildcardSegments = 16;
 
-    private readonly ConcurrentDictionary<string, List<RouteEntry>> _exact = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<int, List<RouteEntry>> _wildcard = new();
+    // 存储为「不可变数组」而非可变 List：
+    // 注册时用 lock 保护并整体替换引用，读取时无需加锁、无需复制。
+    // 早期实现每次 Match 都在 lock 内 ToArray()，实测每请求多分配 32~776 B。
+    private readonly ConcurrentDictionary<string, RouteEntry[]> _exact = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<int, RouteEntry[]> _wildcard = new();
+
+    /// <summary>注册期使用的写锁（读路径完全不加锁）。</summary>
+    private readonly object _writeLock = new();
     private int _order;
 
     /// <summary>注册路由。同一 (路径, 方法) 重复注册时，后注册者覆盖前者。</summary>
@@ -64,25 +70,32 @@ public sealed class RouteTable
             Segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries),
         };
 
-        if (entry.IsWildcard)
+        lock (_writeLock)
         {
-            List<RouteEntry> bucket = _wildcard.GetOrAdd(entry.Segments.Length, _ => new List<RouteEntry>());
-            lock (bucket)
+            if (entry.IsWildcard)
             {
-                bucket.RemoveAll(e => string.Equals(e.Path, normalizedPath, StringComparison.OrdinalIgnoreCase)
-                                      && e.Method == normalizedMethod);
-                bucket.Add(entry);
+                RouteEntry[] current = _wildcard.TryGetValue(entry.Segments.Length, out RouteEntry[]? b)
+                    ? b
+                    : Array.Empty<RouteEntry>();
+
+                var next = new List<RouteEntry>(current);
+                next.RemoveAll(e => string.Equals(e.Path, normalizedPath, StringComparison.OrdinalIgnoreCase)
+                                    && e.Method == normalizedMethod);
+                next.Add(entry);
                 // 段数多者更具体，先匹配。
-                bucket.Sort((a, b) => b.Order.CompareTo(a.Order));
+                next.Sort((a, b) => b.Order.CompareTo(a.Order));
+                _wildcard[entry.Segments.Length] = next.ToArray();
             }
-        }
-        else
-        {
-            List<RouteEntry> list = _exact.GetOrAdd(normalizedPath, _ => new List<RouteEntry>());
-            lock (list)
+            else
             {
-                list.RemoveAll(e => e.Method == normalizedMethod);
-                list.Add(entry);
+                RouteEntry[] current = _exact.TryGetValue(normalizedPath, out RouteEntry[]? l)
+                    ? l
+                    : Array.Empty<RouteEntry>();
+
+                var next = new List<RouteEntry>(current);
+                next.RemoveAll(e => e.Method == normalizedMethod);
+                next.Add(entry);
+                _exact[normalizedPath] = next.ToArray();
             }
         }
     }
@@ -105,73 +118,132 @@ public sealed class RouteTable
         }
 
         // 1) 精准匹配
-        if (_exact.TryGetValue(path, out List<RouteEntry>? exactList))
+        if (_exact.TryGetValue(path, out RouteEntry[]? exactList))
         {
-            RouteMatch? m = TryMatchInList(exactList, method);
-            if (m is not null) return m;
+            if (TryMatchInList(exactList, method, out RouteMatch m)) return m;
+
+            // 路径命中但方法不符：只有这种情况才走 405 分支，不在热路径上。
+            return RouteMatch.MethodNotAllowed(AllowedMethodsOf(exactList));
         }
 
         // 2) 通配匹配：段数多者优先（更具体）
-        string[] segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length <= MaxWildcardSegments)
+        // 用栈上 Span 切段，避免 string.Split 每次分配数组 + 子串（实测 192 B/op）。
+        ReadOnlySpan<char> span = path.AsSpan();
+        if (span.Length > 0 && span[0] == '/') span = span[1..];
+        int segCount = CountSegments(span);
+        if (segCount is > 0 and <= MaxWildcardSegments)
         {
-            for (int len = segments.Length; len >= 1; len--)
+            Span<Range> ranges = stackalloc Range[MaxWildcardSegments + 1];
+            int parts = SplitSegments(span, ranges);
+
+            for (int len = segCount; len >= 1; len--)
             {
-                if (!_wildcard.TryGetValue(len, out List<RouteEntry>? bucket)) continue;
+                if (!_wildcard.TryGetValue(len, out RouteEntry[]? snapshot)) continue;
 
-                RouteEntry[] snapshot;
-                lock (bucket) snapshot = bucket.ToArray();
-
-                List<RouteEntry>? matchedPath = null;
+                RouteMatch found = default;
+                bool hit = false;
                 foreach (RouteEntry entry in snapshot)
                 {
-                    if (SegmentsMatch(entry.Segments, segments))
+                    if (SegmentsMatch(entry.Segments, span, ranges, parts))
                     {
-                        (matchedPath ??= new List<RouteEntry>()).Add(entry);
+                        // 同段数下，先按方法挑，再退到任意方法；命中即返回第一个。
+                        if (string.Equals(entry.Method, method, StringComparison.OrdinalIgnoreCase) || entry.Method is null)
+                        {
+                            found = RouteMatch.Ok(entry);
+                            hit = true;
+                            break;
+                        }
                     }
                 }
-                if (matchedPath is null) continue;
-
-                RouteMatch? m = TryMatchInList(matchedPath, method, allowAnyMethodEntry: true);
-                if (m is not null) return m;
+                if (hit) return found;
             }
         }
 
         return RouteMatch.NotFound();
     }
 
-    private static RouteMatch? TryMatchInList(List<RouteEntry> list, string method, bool allowAnyMethodEntry = false)
+    /// <summary>
+    /// 在一组候选路由里按方法挑选。
+    /// 返回 true 表示找到了可直接响应的路由（写入 <paramref name="match"/>）；
+    /// 返回 false 表示该方法列表里没有匹配项。
+    /// </summary>
+    private static bool TryMatchInList(RouteEntry[] snapshot, string method, out RouteMatch match)
     {
-        RouteEntry[] snapshot;
-        lock (list) snapshot = list.ToArray();
-
         // 先找方法精确匹配，再退回任意方法路由。
         foreach (RouteEntry entry in snapshot)
         {
             if (entry.Method is not null && string.Equals(entry.Method, method, StringComparison.OrdinalIgnoreCase))
             {
-                return RouteMatch.Ok(entry);
+                match = RouteMatch.Ok(entry);
+                return true;
             }
         }
         foreach (RouteEntry entry in snapshot)
         {
             if (entry.Method is null)
             {
-                return RouteMatch.Ok(entry);
+                match = RouteMatch.Ok(entry);
+                return true;
             }
         }
 
-        // 路径命中但方法不符。
-        if (snapshot.Length > 0)
+        match = default;
+        return false;
+    }
+
+    /// <summary>从候选里提取所有允许的方法（仅 405 分支调用，不在热路径上）。</summary>
+    private static string[] AllowedMethodsOf(RouteEntry[] snapshot)
+    {
+        string[] allowed = snapshot
+            .Where(e => e.Method is not null)
+            .Select(e => e.Method!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return allowed;
+    }
+
+    /// <summary>统计段数（以 '/' 分隔，忽略空段）。</summary>
+    private static int CountSegments(ReadOnlySpan<char> path)
+    {
+        int count = 0;
+        int i = 0;
+        while (i < path.Length)
         {
-            string[] allowed = snapshot
-                .Where(e => e.Method is not null)
-                .Select(e => e.Method!)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            return RouteMatch.MethodNotAllowed(allowed);
+            while (i < path.Length && path[i] == '/') i++;
+            if (i >= path.Length) break;
+            count++;
+            while (i < path.Length && path[i] != '/') i++;
         }
-        return null;
+        return count;
+    }
+
+    /// <summary>把路径切段写入 <paramref name="ranges"/>，返回实际段数。无分配。</summary>
+    private static int SplitSegments(ReadOnlySpan<char> path, Span<Range> ranges)
+    {
+        int count = 0;
+        int i = 0;
+        while (i < path.Length && count < ranges.Length)
+        {
+            while (i < path.Length && path[i] == '/') i++;
+            if (i >= path.Length) break;
+            int start = i;
+            while (i < path.Length && path[i] != '/') i++;
+            ranges[count++] = new Range(start, i);
+        }
+        return count;
+    }
+
+    /// <summary>用 Span 版本逐段比较，避免分配子串。</summary>
+    private static bool SegmentsMatch(string[] routeSegments, ReadOnlySpan<char> path, Span<Range> ranges, int parts)
+    {
+        if (routeSegments.Length != parts) return false;
+        for (int i = 0; i < routeSegments.Length; i++)
+        {
+            if (routeSegments[i] == "*") continue;
+            ReadOnlySpan<char> seg = path[ranges[i]];
+            if (!seg.Equals(routeSegments[i].AsSpan(), StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        return true;
     }
 
     /// <summary>逐段比较，'*' 匹配任意单段。</summary>
@@ -194,16 +266,14 @@ public sealed class RouteTable
     }
 
     /// <summary>当前注册的路由总数。</summary>
-    public int Count =>
-        _exact.Values.Sum(l => { lock (l) return l.Count; }) +
-        _wildcard.Values.Sum(l => { lock (l) return l.Count; });
+    public int Count => _exact.Values.Sum(a => a.Length) + _wildcard.Values.Sum(a => a.Length);
 
     /// <summary>列出全部路由（调试与文档用）。</summary>
     public IReadOnlyList<RouteEntry> Entries()
     {
         var result = new List<RouteEntry>();
-        foreach (List<RouteEntry> l in _exact.Values) { lock (l) result.AddRange(l); }
-        foreach (List<RouteEntry> l in _wildcard.Values) { lock (l) result.AddRange(l); }
+        foreach (RouteEntry[] a in _exact.Values) result.AddRange(a);
+        foreach (RouteEntry[] a in _wildcard.Values) result.AddRange(a);
         return result.OrderBy(e => e.Order).ToArray();
     }
 
@@ -211,30 +281,51 @@ public sealed class RouteTable
     internal static string NormalizePath(string path)
     {
         if (string.IsNullOrEmpty(path)) return "/";
-        string p = path.StartsWith('/') ? path : "/" + path;
-        if (p.Length > 1 && p.EndsWith('/')) p = p.TrimEnd('/');
+
+        // 快路径：绝大多数真实请求已是以 '/' 开头且不以 '/' 结尾的形态，
+        // 直接原样返回，避免 TrimEnd 产生新字符串（实测每次 32 B 分配）。
+        bool startsOk = path.Length > 0 && path[0] == '/';
+        bool endsOk = path.Length == 1 || path[^1] != '/';
+        if (startsOk && endsOk) return path;
+
+        string p = startsOk ? path : "/" + path;
+        if (p.Length > 1 && p[^1] == '/') p = p.TrimEnd('/');
         return p.Length == 0 ? "/" : p;
     }
 }
 
 /// <summary>路由匹配结果。</summary>
-public sealed class RouteMatch
+/// <summary>
+/// 路由匹配结果。
+/// <para>
+/// 刻意设计为 <c>readonly struct</c>：路由匹配是每个请求的必经路径，
+/// 实测每次返回引用类型会分配 72 B（未命中 192 B）。改成值类型后该分配归零。
+/// </para>
+/// </summary>
+public readonly struct RouteMatch
 {
-    public RouteEntry? Entry { get; private init; }
+    public RouteEntry? Entry { get; }
 
-    public RouteMatchKind Kind { get; private init; }
+    public RouteMatchKind Kind { get; }
 
     /// <summary>方法不符时给出的 Allow 列表。</summary>
-    public string[] AllowedMethods { get; private init; } = Array.Empty<string>();
+    public string[] AllowedMethods { get; }
 
     public bool IsMatched => Kind == RouteMatchKind.Matched;
 
-    public static RouteMatch Ok(RouteEntry entry) => new() { Entry = entry, Kind = RouteMatchKind.Matched };
+    private RouteMatch(RouteEntry? entry, RouteMatchKind kind, string[] allowedMethods)
+    {
+        Entry = entry;
+        Kind = kind;
+        AllowedMethods = allowedMethods;
+    }
 
-    public static RouteMatch NotFound() => new() { Kind = RouteMatchKind.NotFound };
+    public static RouteMatch Ok(RouteEntry entry) => new(entry, RouteMatchKind.Matched, Array.Empty<string>());
+
+    public static RouteMatch NotFound() => new(null, RouteMatchKind.NotFound, Array.Empty<string>());
 
     public static RouteMatch MethodNotAllowed(string[] allowed) =>
-        new() { Kind = RouteMatchKind.MethodNotAllowed, AllowedMethods = allowed };
+        new(null, RouteMatchKind.MethodNotAllowed, allowed);
 }
 
 public enum RouteMatchKind

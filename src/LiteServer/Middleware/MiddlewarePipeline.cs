@@ -16,32 +16,37 @@ public delegate Task<bool> MiddlewareDelegate(HttpListenerRequest request, HttpL
 /// </summary>
 public sealed class MiddlewarePipeline
 {
-    private readonly List<MiddlewareDelegate> _middlewares = new();
-    private readonly object _lock = new();
+    // 与 RouteTable 同样采用「不可变快照」：注册期加锁替换引用，读取期零锁零分配。
+    private readonly object _writeLock = new();
+    private volatile MiddlewareDelegate[] _snapshot = Array.Empty<MiddlewareDelegate>();
 
     public void Use(MiddlewareDelegate middleware)
     {
         ArgumentNullException.ThrowIfNull(middleware);
-        lock (_lock) _middlewares.Add(middleware);
+
+        lock (_writeLock)
+        {
+            var next = new MiddlewareDelegate[_snapshot.Length + 1];
+            Array.Copy(_snapshot, next, _snapshot.Length);
+            next[^1] = middleware;
+            _snapshot = next;
+        }
     }
 
     public void Clear()
     {
-        lock (_lock) _middlewares.Clear();
+        lock (_writeLock) _snapshot = Array.Empty<MiddlewareDelegate>();
     }
 
-    public int Count
-    {
-        get { lock (_lock) return _middlewares.Count; }
-    }
+    public int Count => _snapshot.Length;
 
     /// <summary>
     /// 依次执行中间件。任一返回 false 即中止，调用方不应再写响应。
     /// </summary>
     public async Task<bool> InvokeAsync(HttpListenerRequest request, HttpListenerResponse response, CancellationToken ct = default)
     {
-        MiddlewareDelegate[] snapshot;
-        lock (_lock) snapshot = _middlewares.ToArray();
+        // 直接读 volatile 引用，没有锁、没有复制。
+        MiddlewareDelegate[] snapshot = _snapshot;
 
         foreach (MiddlewareDelegate mw in snapshot)
         {
