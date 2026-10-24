@@ -234,10 +234,17 @@ td.c-name code{
 td.c-ok{color:var(--ok);font-weight:600}
 td.c-no{color:var(--err);font-weight:600}
 td.c-dim{color:var(--ink-3);font-variant-numeric:tabular-nums}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin:4px 0 0}
+.grp{margin:14px 0 0}
+.grp-hd{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);margin-bottom:8px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px 18px;font-size:13.5px}
+.kv .row2{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--hair-soft)}
+.kv .row2 .k{color:var(--ink-3)}
+.kv .row2 .v{font-family:var(--mono);font-size:12.5px;text-align:right;word-break:break-all}
 .tile{background:var(--tile);border-radius:12px;padding:12px 14px}
 .tile .k{font-size:11.5px;color:var(--ink-3);letter-spacing:.02em;margin-bottom:4px}
 .tile .v{font-size:20px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .v.sm{font-size:15px}
 .tile .u{font-size:12px;color:var(--ink-3);font-weight:400;margin-left:2px}
 
 .verdict{
@@ -517,7 +524,7 @@ footer{
         <button data-call="push-now" class="quiet mini">立即推送一帧</button>
         <button data-call="push-status" class="quiet mini">查询状态</button>
       </div>
-      <div class="tiles" id="pushTiles"></div>
+      <div id="pushTiles"></div>
       <pre class="out" id="out-push" tabindex="0"></pre>
       <pre class="out" id="out-pushctl" tabindex="0"></pre>
     </div>
@@ -966,23 +973,61 @@ async function doJobCancel() {
 /* ---------------- ⑨ 服务端推送 ---------------- */
 let pushWs = null;
 
-const PUSH_TILES = [
-  ["seq", "序号", ""],
-  ["threads", "线程", ""],
-  ["memory", "工作集", "MB"],
+// 现场指标卡片（持续变化，用大数字突出）
+const LIVE_TILES = [
+  ["cpu", "CPU", "%"],
+  ["ws", "工作集", "MB"],
+  ["heap", "GC 堆", "KB"],
   ["gc", "GC 次数", ""],
+  ["threads", "线程", ""],
   ["uptime", "运行", "s"],
-  ["online", "在线", ""],
   ["fps", "收帧率", "/s"],
 ];
 
-function renderTiles(values) {
+// 系统配置（基本不变，用键值行展示）
+const SYS_ROWS = [
+  ["machineName", "主机名"], ["userName", "用户"],
+  ["osDescription", "操作系统"], ["osArchitecture", "OS 架构"],
+  ["processArchitecture", "进程架构"], ["framework", "运行时"],
+  ["runtimeMode", "编译模式"], ["processorCount", "逻辑核心"],
+  ["processName", "进程名"], ["processId", "PID"],
+  ["culture", "区域"], ["startTime", "启动时间"],
+  ["currentDirectory", "工作目录"],
+];
+
+// 进程占用（部分字段跨平台不可用 -> 显示「不可用」而非 0）
+const PROC_ROWS = [
+  ["privateMb", "私有内存", "MB"], ["peakWorkingSetMb", "峰值工作集", "MB"],
+  ["virtualMb", "虚拟内存", "MB"], ["osThreads", "OS 线程", ""],
+  ["handleCount", "句柄", ""], ["cpuUserMs", "用户态 CPU", "ms"],
+  ["cpuPrivilegedMs", "内核态 CPU", "ms"], ["cpuTotalMs", "总 CPU 时间", "ms"],
+  ["diskTotalGb", "磁盘总量", "GB"], ["diskFreeGb", "磁盘可用", "GB"],
+  ["upNetworkInterfaces", "在线网卡", ""],
+];
+
+function tile(label, value, unit, small) {
+  return `<div class="tile"><div class="k">${label}</div>` +
+         `<div class="v${small ? " sm" : ""}">${value}${unit ? `<span class="u">${unit}</span>` : ""}</div></div>`;
+}
+
+function kvRow(label, value, unit) {
+  const shown = (value === null || value === undefined) ? "不可用" : `${value}${unit || ""}`;
+  const cls = (value === null || value === undefined) ? " style=\"color:var(--ink-3)\"" : "";
+  return `<div class="row2"><span class="k">${label}</span><span class="v"${cls}>${shown}</span></div>`;
+}
+
+function renderSnapshot(snap, live, sys, proc) {
   const host = $("pushTiles");
-  host.innerHTML = PUSH_TILES.map(([k, label, unit]) => {
-    const v = values[k] ?? "-";
-    return `<div class="tile"><div class="k">${label}</div>` +
-           `<div class="v">${v}${unit ? `<span class="u">${unit}</span>` : ""}</div></div>`;
-  }).join("");
+
+  const liveHtml = LIVE_TILES.map(([k, label, unit]) =>
+    tile(label, live[k] ?? "-", unit, k === "gc")).join("");
+  const sysHtml = SYS_ROWS.map(([k, label]) => kvRow(label, sys?.[k])).join("");
+  const procHtml = PROC_ROWS.map(([k, label, unit]) => kvRow(label, proc?.[k], unit)).join("");
+
+  host.innerHTML =
+    `<div class="grp"><div class="grp-hd">运行时指标</div><div class="tiles">${liveHtml}</div></div>` +
+    `<div class="grp"><div class="grp-hd">系统配置</div><div class="kv">${sysHtml}</div></div>` +
+    `<div class="grp"><div class="grp-hd">进程占用</div><div class="kv">${procHtml}</div></div>`;
 }
 
 function startPush() {
@@ -1030,18 +1075,24 @@ function startPush() {
     const elapsed = (now - windowStart) / 1000;
     const fps = elapsed > 0 ? (frames / elapsed).toFixed(1) : "-";
 
-    const p = f.payload;
-    renderTiles({
-      seq: f.seq,
-      threads: p.managedThreads,
-      memory: p.workingSetMB,
-      gc: `${p.gcGen0}/${p.gcGen1}/${p.gcGen2}`,
-      uptime: p.uptimeSec,
-      online: f.onlineClients,
-      fps: fps,
-    });
+    const snap = f.payload || {};
+    const perf = snap.perf || {};
+    const proc = snap.process || {};
 
-    log.push(`#${f.seq} ${p.message} 线程=${p.managedThreads} 内存=${p.workingSetMB}MB 在线=${f.onlineClients}`);
+    renderSnapshot(snap,
+      {
+        cpu: perf.processCpuPercent,
+        ws: proc.workingSetMb,
+        heap: perf.gcHeapKb,
+        gc: `${perf.gen0Collections}·${perf.gen1Collections}·${perf.gen2Collections}`,
+        threads: proc.managedThreads,
+        uptime: perf.uptimeSec,
+        fps: fps,
+      },
+      snap.system, proc);
+
+    log.push(`#${f.seq} CPU=${perf.processCpuPercent}% 工作集=${proc.workingSetMb}MB ` +
+             `堆=${perf.gcHeapKb}KB 线程=${proc.managedThreads} 在线=${f.onlineClients}`);
     // 日志只留最近 8 条，避免无限增长
     if (log.length > 9) log.splice(1, log.length - 9);
     show("out-push", log.join("\n"));

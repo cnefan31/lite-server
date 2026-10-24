@@ -152,8 +152,28 @@ server.MapGet("/api/di", (req, res) =>
 
 ## 服务端主动推送
 
-示例包含一个基于 `BackgroundService` 的定时推送服务，向所有在线 WebSocket 连接广播运行时指标
-（线程数、工作集、GC 次数、运行时长、在线连接数）。
+示例包含一个基于 `BackgroundService` 的定时推送服务，向所有在线 WebSocket 连接广播
+**完整系统快照**，分三块：
+
+| 分组 | 内容 |
+|---|---|
+| 系统配置 | 主机名、用户、OS 与架构、运行时版本、编译模式（JIT/AOT）、逻辑核心、进程名与 PID、启动时间、工作目录、区域 |
+| 运行时性能 | GC 堆 / 已提交 / 碎片、Gen0/1/2 累计与增量、GC 暂停累计与增量、累计分配量、线程池 worker/pending/completed、进程 CPU 使用率、运行时长 |
+| 进程占用 | 工作集、私有内存、峰值工作集、虚拟内存、托管与 OS 线程、句柄数、用户态/内核态/总 CPU 时间、磁盘总量与可用、在线网卡数 |
+
+### 跨平台字段的处理
+
+macOS 上 `PrivateMemorySize64`、`PeakWorkingSet64`、`HandleCount` 恒为 0。
+框架把这些字段置 `null` 而非 0（序列化时省略），前端显示「不可用」——
+**不展示会误导的假数据**。实测 AOT 下该机器有 3 个字段不可用，前端均正确标注。
+
+### 两个容易判错的地方
+
+- **进程名**：以 `dotnet app.dll` 启动时，`Process.GetCurrentProcess().ProcessName` 与
+  `Environment.ProcessPath` 都会给出宿主名 `dotnet`。只有入口程序集名在 JIT/AOT 下都指向真实应用。
+- **编译模式**：不能用 `RuntimeFeature.IsDynamicCodeCompiled` 判断——csproj 里 `PublishAot=true`
+  会让普通 build 的 runtimeconfig 也把它置 `false`，实测 JIT 运行却被误判为 NativeAOT。
+  可靠判据是「同目录是否存在 `<AssemblyName>.runtimeconfig.json`」。
 
 ```csharp
 public sealed class PushService : BackgroundService
