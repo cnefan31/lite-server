@@ -1,8 +1,8 @@
-# LiteServer 安全审计报告
+# NanoServer 安全审计报告
 
 | 项 | 内容 |
 |---|---|
-| 审计对象 | LiteServer 库 + `samples/LiteServer.Sample` 示例服务 |
+| 审计对象 | NanoServer 库 + `samples/NanoServer.Sample` 示例服务 |
 | 审计日期 | 2026-10-24 |
 | 审计方式 | 黑盒实测（真机 HTTP 请求）+ 关键路径源码复核 |
 | 环境 | macOS arm64 / .NET 10.0.5 / JIT 与 NativeAOT 双构建各验一轮 |
@@ -27,7 +27,7 @@
 
 ### H-1 · SSRF：内网与云元数据服务可被访问（高危）
 
-**位置** `samples/LiteServer.Sample/Program.cs` → `GET /api/upstream`
+**位置** `samples/NanoServer.Sample/Program.cs` → `GET /api/upstream`
 
 **问题** 原实现只校验 scheme 是否为 http(s)，完全不限制目标地址。实测可让服务器
 访问任意内网地址：
@@ -41,7 +41,7 @@ GET /api/upstream?url=http://10.0.0.1/                   -> 未拦截（内网�
 **危害** 攻击者借此探测内网拓扑；在云环境中可请求 `169.254.169.254` 读取
 IAM 临时凭证，进而横向接管云资源。这是 SSRF 最典型的严重后果。
 
-**修复** 新增库级组件 `src/LiteServer/Security/SsrfGuard.cs`：
+**修复** 新增库级组件 `src/NanoServer/Security/SsrfGuard.cs`：
 
 - 只允许 http/https
 - **解析出 IP 之后**判定（而非只查域名字面量），拒绝：
@@ -66,7 +66,7 @@ file:// · gopher:// · dict://
 
 ### M-1 · CORS：任意 Origin 被回显且允许携带凭证（中危）
 
-**位置** `src/LiteServer/LiteWebServer.cs` → `HandleCorsAsync`
+**位置** `src/NanoServer/NanoWebServer.cs` → `HandleCorsAsync`
 
 **问题** `UseCors()` 无参调用时，原实现把请求的 `Origin` 原样回显，并强制附加
 `Access-Control-Allow-Credentials: true`。实测：
@@ -93,7 +93,7 @@ Origin: null                  ->  Access-Control-Allow-Origin: null（同样放�
 
 ### M-2 · 上传无大小限制：可耗尽磁盘（中危）
 
-**位置** `samples/LiteServer.Sample/Program.cs` → `POST /api/upload`
+**位置** `samples/NanoServer.Sample/Program.cs` → `POST /api/upload`
 
 **问题** 原实现来者不拒。实测：
 
@@ -139,7 +139,7 @@ Origin: null                  ->  Access-Control-Allow-Origin: null（同样放�
 
 ### L-4 · 示例凭据为硬编码明文
 
-`lite-sample-secret` / `lite_sample_jwt_secret_2026` 直接写在示例代码里，仅作演示。
+`nano-sample-secret` / `nano_sample_jwt_secret_2026` 直接写在示例代码里，仅作演示。
 生产务必通过环境变量或密钥管理服务注入，并定期轮换。
 
 ---
@@ -195,7 +195,7 @@ Origin: null                  ->  Access-Control-Allow-Origin: null（同样放�
 
 框架不拼 SQL / 命令 / 模板，无对应注入面。
 错误响应仅返回纯文本短语（`invalid json body` / `not found`），
-不含堆栈、不含物理路径 —— 已断言 `/Users/` 与 `at LiteServer` 均不出现。
+不含堆栈、不含物理路径 —— 已断言 `/Users/` 与 `at NanoServer` 均不出现。
 
 ### 目录枚举
 
@@ -239,7 +239,7 @@ Set-Cookie: lite_sid=...; Path=/; Expires=...; HttpOnly; SameSite=Lax
 
 ```bash
 # 启动示例服务
-dotnet run --project samples/LiteServer.Sample
+dotnet run --project samples/NanoServer.Sample
 
 # 执行安全回归（28 项断言）
 ./tools/security-test.sh

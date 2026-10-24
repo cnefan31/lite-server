@@ -1,4 +1,4 @@
-# LiteServer API 手册
+# NanoServer API 手册
 
 按功能分组列出全部公开 API。签名与默认值均取自源码，`→` 表示返回值用于链式调用。
 
@@ -6,14 +6,14 @@
 
 | 命名空间 | 内容 |
 |---|---|
-| `LiteServer` | `LiteWebServer`、`RequestScope` 及其扩展 |
-| `LiteServer.Http` | 请求/响应/文件/Cookie 扩展 |
-| `LiteServer.Routing` | `RequestHandler`、`RouteTable`、`RouteEntry` |
-| `LiteServer.Middleware` | `MiddlewareDelegate`、管线、静态文件、鉴权 |
-| `LiteServer.Security` | `Jwt`、`SsrfGuard`、`TokenBlacklist`、`RateLimiter` |
-| `LiteServer.WebSockets` | `WebSocketHub`、`WebSocketOptions` |
-| `LiteServer.Logging` | `LiteLogger`、`AccessLogOptions`、`LiteLogEvents` |
-| `LiteServer.Hosting` | `LiteServerOptions`、`LiteServerHost`、`AddLiteServer` |
+| `NanoServer` | `NanoWebServer`、`RequestScope` 及其扩展 |
+| `NanoServer.Http` | 请求/响应/文件/Cookie 扩展 |
+| `NanoServer.Routing` | `RequestHandler`、`RouteTable`、`RouteEntry` |
+| `NanoServer.Middleware` | `MiddlewareDelegate`、管线、静态文件、鉴权 |
+| `NanoServer.Security` | `Jwt`、`SsrfGuard`、`TokenBlacklist`、`RateLimiter` |
+| `NanoServer.WebSockets` | `WebSocketHub`、`WebSocketOptions` |
+| `NanoServer.Logging` | `NanoLogger`、`AccessLogOptions`、`NanoLogEvents` |
+| `NanoServer.Hosting` | `NanoServerOptions`、`NanoServerHost`、`AddNanoServer` |
 
 ---
 
@@ -24,11 +24,11 @@
 ```csharp
 // 方式一：通用主机（推荐生产）
 var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddLiteServer(o => { o.Port = 8090; }, server => { /* 注册路由 */ });
+builder.Services.AddNanoServer(o => { o.Port = 8090; }, server => { /* 注册路由 */ });
 await builder.Build().RunAsync();
 
 // 方式二：独立模式（无需 DI/宿主）
-await using var server = new LiteWebServer();
+await using var server = new NanoWebServer();
 server.MapGet("/", (req, res) => res.WriteAsync("ok"));
 await server.StartAsync("127.0.0.1", 8090);
 await Task.Delay(Timeout.Infinite);
@@ -44,9 +44,9 @@ await Task.Delay(Timeout.Infinite);
 | `StartAsync(string? host, int port = 8090)` | 异步启动，指定主机 |
 | `StopAsync()` | 异步停止：取消 accept、关闭监听、断开所有 WS |
 | `Stop()` | 同步停止 |
-| `DisposeAsync()` | 释放资源。`LiteWebServer` 实现 `IAsyncDisposable`，建议 `await using` |
+| `DisposeAsync()` | 释放资源。`NanoWebServer` 实现 `IAsyncDisposable`，建议 `await using` |
 
-> 独立模式推荐 `await using var server = new LiteWebServer();` —— 作用域结束自动
+> 独立模式推荐 `await using var server = new NanoWebServer();` —— 作用域结束自动
 > `DisposeAsync`，确保监听器、WebSocket 连接与黑名单清理任务全部释放。
 
 ### 状态属性
@@ -127,7 +127,7 @@ server.UseStaticFiles("/", "wwwroot", maxAgeSeconds: 3600);
 
 ---
 
-## 四、请求读取（`LiteServer.Http`）
+## 四、请求读取（`NanoServer.Http`）
 
 ### 查询参数
 
@@ -261,7 +261,7 @@ res.AppendCookie("sid", id, new CookieExtensions.CookieOptions {
 | `ReadStringClaim(payloadJson, claim)` | 读字符串型 claim（sub/role） |
 
 ```csharp
-long exp = LiteWebServer.UnixSeconds(3600);
+long exp = NanoWebServer.UnixSeconds(3600);
 string token = Jwt.Generate($"{{\"sub\":\"u1\",\"exp\":{exp}}}", secret);
 ```
 
@@ -368,19 +368,19 @@ server.MapGet("/api/di", (req, res) => {
 `server.Logger`（`ILogger`）默认 `NullLogger`。用内置源生成方法记录以保证零装箱：
 
 ```csharp
-using LiteServer.Logging;
+using NanoServer.Logging;
 
-LiteLogger.ServerStarted(server.Logger, server.Prefix!, "JIT");
-LiteLogger.AuthRejected(logger, "GET", "/api/x", "缺少 token");
-LiteLogger.SsrfBlocked(logger, url, verdict.ToString());
+NanoLogger.ServerStarted(server.Logger, server.Prefix!, "JIT");
+NanoLogger.AuthRejected(logger, "GET", "/api/x", "缺少 token");
+NanoLogger.SsrfBlocked(logger, url, verdict.ToString());
 ```
 
 ### 全部日志方法（19 个）
 
 | EventId | 方法 | 级别 | 消息模板 |
 |---|---|---|---|
-| 1001 | `ServerStarted(logger, prefix, mode)` | Info | LiteServer 启动：{Prefix}（模式 {Mode}） |
-| 1002 | `ServerStopped(logger, prefix)` | Info | LiteServer 停止：{Prefix} |
+| 1001 | `ServerStarted(logger, prefix, mode)` | Info | NanoServer 启动：{Prefix}（模式 {Mode}） |
+| 1002 | `ServerStopped(logger, prefix)` | Info | NanoServer 停止：{Prefix} |
 | 1003 | `AcceptLoopRetry(logger, reason)` | Warn | 监听中断，10ms 后重试：{Reason} |
 | 2001 | `RequestCompleted(logger, method, path, status, ms)` | Info | {Method} {Path} {Status} {ElapsedMs}ms |
 | 2002 | `RouteNotFound(logger, method, path)` | Warn | 路由未命中：{Method} {Path} |
@@ -404,9 +404,9 @@ LiteLogger.SsrfBlocked(logger, url, verdict.ToString());
 按段落过滤示例：
 
 ```csharp
-builder.Logging.AddFilter("LiteServer", LogLevel.Warning);
+builder.Logging.AddFilter("NanoServer", LogLevel.Warning);
 builder.Logging.AddFilter((category, level, eventId) =>
-    eventId.Id >= LiteLogEvents.Security);   // 只看安全事件
+    eventId.Id >= NanoLogEvents.Security);   // 只看安全事件
 ```
 
 ---
@@ -451,7 +451,7 @@ server.OnUnhandledException((ex, req) =>
 
 ## 十五、响应内容类型常量
 
-`LiteServer.Http.ContentTypes`：
+`NanoServer.Http.ContentTypes`：
 
 | 常量 | 值 |
 |---|---|

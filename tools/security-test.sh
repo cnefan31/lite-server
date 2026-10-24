@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# LiteServer 安全回归测试。
+# NanoServer 安全回归测试。
 #
 # 用法：./tools/security-test.sh [base-url] [api-key]
-# 默认：http://127.0.0.1:8090  lite-sample-secret
+# 默认：http://127.0.0.1:8090  nano-sample-secret
 #
 # 覆盖 OWASP 常见面：路径穿越、JWT 攻击、SSRF、CRLF 注入、
 # DoS 资源耗尽、CORS 配置、信息泄露、WebSocket 鉴权。
@@ -12,7 +12,7 @@
 set -uo pipefail
 
 BASE="${1:-http://127.0.0.1:8090}"
-KEY="${2:-lite-sample-secret}"
+KEY="${2:-nano-sample-secret}"
 
 PASS=0; FAIL=0; FAILED=""
 
@@ -46,7 +46,7 @@ TOKEN=$(curl -sS -X POST "$BASE/api/login" -d "{\"apiKey\":\"$KEY\"}" 2>/dev/nul
         | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 AUTH=(-H "Authorization: Bearer $TOKEN")
 
-echo "LiteServer 安全回归测试   目标 $BASE"
+echo "NanoServer 安全回归测试   目标 $BASE"
 hr
 
 echo "[1] 路径穿越与隐藏文件"
@@ -87,7 +87,7 @@ for o in "https://evil.example" "null"; do
 done
 
 echo "[6] 信息泄露"
-expect_absent "错误响应不含堆栈" "at LiteServer" -X POST "$BASE/api/login" -d '{bad'
+expect_absent "错误响应不含堆栈" "at NanoServer" -X POST "$BASE/api/login" -d '{bad'
 expect_absent "错误响应不含物理路径" "/Users/" -X POST "$BASE/api/login" -d '{bad'
 expect "目录枚举被拒 /src/" 404 "${AUTH[@]}" "$BASE/src/"
 expect "目录枚举被拒 /.git/" 404 "${AUTH[@]}" "$BASE/.git/"

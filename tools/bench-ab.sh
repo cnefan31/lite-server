@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.." || exit 1
 N="${1:-2000}"; C="${2:-50}"; R="${3:-3}"
 PORT=8090
 BASE="http://127.0.0.1:$PORT"
-PROJ=samples/LiteServer.Sample
+PROJ=samples/NanoServer.Sample
 
 command -v hey >/dev/null 2>&1 || { echo "需要 hey：brew install hey"; exit 1; }
 
@@ -23,7 +23,7 @@ mkdir -p "$PROJ/dist/wwwroot" && cp "$PROJ"/bin/Release/net10.0/wwwroot/* "$PROJ
 
 run_one() {
   local label="$1" cmd="$2"
-  pkill -f "lite-sample" 2>/dev/null; sleep 1
+  pkill -f "nano-sample" 2>/dev/null; sleep 1
   eval "$cmd" >/tmp/bench-ab.log 2>&1 &
   for _ in $(seq 1 40); do
     curl -sS -o /dev/null "$BASE/api/health" 2>/dev/null && break
@@ -37,15 +37,15 @@ run_one() {
   avg=$(hey -n "$N" -c "$C" "$BASE/api/health" 2>&1 | awk '/^  Average:/{print $2}')
   printf '  %-12s %10s req/s   avg %s\n' "$label" "$rps" "$avg"
   LAST_RPS="$rps"
-  pkill -f "lite-sample" 2>/dev/null; sleep 1
+  pkill -f "nano-sample" 2>/dev/null; sleep 1
 }
 
 echo
 echo "JIT vs AOT（每轮 $N 请求 / 并发 $C / $R 轮取中位数）"
 echo "--------------------------------------------------------"
-run_one "JIT" "dotnet $PROJ/bin/Release/net10.0/lite-sample.dll"
+run_one "JIT" "dotnet $PROJ/bin/Release/net10.0/nano-sample.dll"
 JIT_RPS="$LAST_RPS"
-run_one "NativeAOT" "./$PROJ/dist/lite-sample"
+run_one "NativeAOT" "./$PROJ/dist/nano-sample"
 AOT_RPS="$LAST_RPS"
 echo "--------------------------------------------------------"
 awk -v j="$JIT_RPS" -v a="$AOT_RPS" 'BEGIN{

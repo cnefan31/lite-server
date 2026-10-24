@@ -1,4 +1,4 @@
-# LiteServer 文档
+# NanoServer 文档
 
 | 文档 | 内容 | 适合谁读 |
 |---|---|---|
@@ -7,6 +7,7 @@
 | [CONFIGURATION.md](CONFIGURATION.md) | **全部可配置参数**：默认值、边界、调优建议与实测数据 | 部署调优 |
 | [OPTIMIZATION.md](OPTIMIZATION.md) | 性能优化评估：已做项数据、可继续做的方向、不建议做的项 | 关心性能 |
 | [SECURITY-AUDIT.md](SECURITY-AUDIT.md) | 安全审计：已修漏洞、验证通过项、加固建议 | 安全评审 |
+| [PUBLISHING.md](PUBLISHING.md) | 发布指南：NuGet API Key 配置、打 tag 发版、本地打包 | 维护者 |
 
 ## 快速索引
 
@@ -28,7 +29,7 @@
 
 **上传大小限制** → CONFIGURATION § 十、文件传输（库不限制，需业务层做）
 
-**后台推送前端** → README「服务端主动推送」/ `samples/LiteServer.Sample/Push/`
+**后台推送前端** → README「服务端主动推送」/ `samples/NanoServer.Sample/Push/`
 
 ## 实测数据说明
 
