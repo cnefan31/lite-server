@@ -128,6 +128,34 @@ public static class JobEndpoints
             return res.WriteJsonAsync(JsonSerializer.Serialize(payload, JobJsonContext.Default.DiProbeResponse));
         });
 
+        // 日志能力自检：把当前日志配置反馈给页面。
+        // 注意必须用源生成序列化——AOT 下反射序列化被禁用。
+        server.MapGet("/api/logs/info", (req, res) =>
+        {
+            LiteWebServer srv = req.RequireService<LiteWebServer>();
+            Logging.AccessLogOptions opts = srv.AccessLog;
+
+            var payload = new LogInfoResponse(
+                Enabled: opts.Enabled,
+                IncludeQueryString: opts.IncludeQueryString,
+                SlowThresholdMs: opts.SlowRequestThreshold.TotalMilliseconds,
+                ExcludedPaths: opts.ExcludedPaths.ToArray(),
+                LoggerType: srv.Logger.GetType().Name,
+                EventRanges: new Dictionary<string, int>
+                {
+                    ["ServerLifecycle"] = Logging.LiteLogEvents.ServerLifecycle,
+                    ["RequestPipeline"] = Logging.LiteLogEvents.RequestPipeline,
+                    ["Exception"] = Logging.LiteLogEvents.Exception,
+                    ["Authentication"] = Logging.LiteLogEvents.Authentication,
+                    ["StaticFiles"] = Logging.LiteLogEvents.StaticFiles,
+                    ["WebSocket"] = Logging.LiteLogEvents.WebSocket,
+                    ["Security"] = Logging.LiteLogEvents.Security,
+                });
+
+            return res.WriteJsonAsync(
+                JsonSerializer.Serialize(payload, JobJsonContext.Default.LogInfoResponse));
+        });
+
         // 用日志证明 DI 注入的 ILogger 在 AOT 下可用
         server.MapGet("/api/di/log", (req, res) =>
         {

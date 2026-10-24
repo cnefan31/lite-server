@@ -2,6 +2,7 @@ using LiteServer.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace LiteServer.Hosting;
@@ -46,6 +47,11 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<LiteWebServer>(sp =>
         {
             var server = new LiteWebServer();
+
+            // 注入日志器：未注册 logging 时退回 NullLogger，零开销。
+            server.Logger = sp.GetService<ILogger<LiteWebServer>>() ?? (ILogger)NullLogger.Instance;
+            server.WebSockets.Logger = sp.GetService<ILogger<WebSockets.WebSocketHub>>() ?? (ILogger)NullLogger.Instance;
+
             var options = sp.GetService<IOptions<LiteServerOptions>>()?.Value;
 
             if (options is not null)
@@ -120,13 +126,13 @@ public static class ServiceCollectionExtensions
         // 顺序 B：鉴权
         if (hasAuth)
         {
-            server.UseJwtAuth(options.JwtSecret!, options.BlacklistCleanupInterval, options.JwtClockSkew);
+            server.UseJwtAuth(options.JwtSecret!, options.BlacklistCleanupInterval, options.JwtClockSkew, server.Logger);
         }
 
         // 顺序 C：静态（默认安全位置，排在鉴权之后）
         if (hasStatic && !options.StaticFilesBeforeAuth)
         {
-            server.UseStaticFiles(options.StaticFilePrefix!, options.StaticFileRoot!, options.StaticFileMaxAgeSeconds);
+            server.UseStaticFiles(options.StaticFilePrefix!, options.StaticFileRoot!, options.StaticFileMaxAgeSeconds, server.Logger);
         }
     }
 }

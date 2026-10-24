@@ -65,6 +65,15 @@ public sealed record DiProbeResponse(
     bool TransientIsAlwaysNew,
     string[] Notes);
 
+/// <summary>日志配置自检响应。</summary>
+public sealed record LogInfoResponse(
+    bool Enabled,
+    bool IncludeQueryString,
+    double SlowThresholdMs,
+    string[] ExcludedPaths,
+    string LoggerType,
+    Dictionary<string, int> EventRanges);
+
 /// <summary>
 /// source-generated JSON 上下文。
 /// <para>
@@ -84,4 +93,5 @@ public sealed record DiProbeResponse(
 [JsonSerializable(typeof(CreateJobRequest))]
 [JsonSerializable(typeof(CreateJobResponse))]
 [JsonSerializable(typeof(DiProbeResponse))]
+[JsonSerializable(typeof(LogInfoResponse))]
 public partial class JobJsonContext : JsonSerializerContext;

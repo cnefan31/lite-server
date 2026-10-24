@@ -5,7 +5,10 @@ using LiteServer.Middleware;
 using LiteServer.Routing;
 using LiteServer.Security;
 using LiteServer.WebSockets;
+using LiteServer.Logging;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LiteServer;
 
@@ -55,6 +58,15 @@ public sealed class LiteWebServer : IAsyncDisposable
     public Hosting.LiteServerOptions Options { get; } = new();
 
     /// <summary>
+    /// 库内部日志器。默认 <see cref="NullLogger.Instance"/>（零开销）；
+    /// <c>AddLiteServer</c> 会从容器注入真实实例。
+    /// </summary>
+    public ILogger Logger { get; set; } = NullLogger.Instance;
+
+    /// <summary>访问日志配置。</summary>
+    public Logging.AccessLogOptions AccessLog { get; } = new();
+
+    /// <summary>
     /// 依赖注入根容器。设置后每个请求会创建独立作用域，
     /// 处理器内可用 <c>request.GetService&lt;T&gt;()</c> 解析作用域服务。
     /// 未设置时处理器无从取服务，但服务器照常工作。
@@ -101,8 +113,12 @@ public sealed class LiteWebServer : IAsyncDisposable
 
     /// <summary>托管静态文件。<paramref name="urlPrefix"/> 为对外前缀，<paramref name="rootFolder"/> 为本地目录。</summary>
     public LiteWebServer UseStaticFiles(string urlPrefix, string rootFolder, int maxAgeSeconds = 0)
+        => UseStaticFiles(urlPrefix, rootFolder, maxAgeSeconds, NullLogger.Instance);
+
+    /// <summary>托管静态文件，并指定该中间件使用的日志器。</summary>
+    public LiteWebServer UseStaticFiles(string urlPrefix, string rootFolder, int maxAgeSeconds, ILogger logger)
     {
-        var mw = new StaticFilesMiddleware(urlPrefix, rootFolder, maxAgeSeconds);
+        var mw = new StaticFilesMiddleware(urlPrefix, rootFolder, maxAgeSeconds) { Logger = logger };
         return Use(mw.InvokeAsync);
     }
 
@@ -115,8 +131,12 @@ public sealed class LiteWebServer : IAsyncDisposable
 
     /// <summary>启用 JWT 鉴权。</summary>
     public LiteWebServer UseJwtAuth(string secret, TimeSpan? cleanupInterval = null, TimeSpan? clockSkew = null)
+        => UseJwtAuth(secret, cleanupInterval, clockSkew, NullLogger.Instance);
+
+    /// <summary>启用 JWT 鉴权，并指定该中间件使用的日志器。</summary>
+    public LiteWebServer UseJwtAuth(string secret, TimeSpan? cleanupInterval, TimeSpan? clockSkew, ILogger logger)
     {
-        Use(AuthMiddleware.Jwt(secret, _whiteList, Blacklist, clockSkew));
+        Use(AuthMiddleware.Jwt(secret, _whiteList, Blacklist, clockSkew, logger));
         if (cleanupInterval is { } interval && interval > TimeSpan.Zero)
         {
             Blacklist.StartAutoCleanup(interval);
@@ -147,7 +167,7 @@ public sealed class LiteWebServer : IAsyncDisposable
         return this;
     }
 
-    private static Task<bool> HandleCorsAsync(HttpListenerRequest request, HttpListenerResponse response, string? allowedOrigin)
+    private Task<bool> HandleCorsAsync(HttpListenerRequest request, HttpListenerResponse response, string? allowedOrigin)
     {
         string? origin = request.Headers["Origin"];
         if (string.IsNullOrEmpty(origin))
@@ -168,6 +188,7 @@ public sealed class LiteWebServer : IAsyncDisposable
             if (self is null || !string.Equals(origin, self, StringComparison.OrdinalIgnoreCase))
             {
                 // 跨源且未授权：不写任何 CORS 头，让浏览器拦截。
+                LiteLogger.CorsRejected(Logger, origin);
                 return Task.FromResult(true);
             }
         }
@@ -257,6 +278,9 @@ public sealed class LiteWebServer : IAsyncDisposable
         _acceptCts = new CancellationTokenSource();
         _acceptTask = Task.Run(() => AcceptLoopAsync(_acceptCts.Token), CancellationToken.None);
 
+        bool isAot = !System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeCompiled;
+        LiteLogger.ServerStarted(Logger, Prefix, isAot ? "NativeAOT" : "JIT");
+
         await Task.CompletedTask.ConfigureAwait(false);
     }
 
@@ -283,6 +307,8 @@ public sealed class LiteWebServer : IAsyncDisposable
 
         await WebSockets.CloseAllAsync("Server stopped").ConfigureAwait(false);
         Blacklist.StopAutoCleanup();
+
+        LiteLogger.ServerStopped(Logger, Prefix ?? "(unknown)");
     }
 
     /// <summary>同步停止。</summary>
@@ -306,6 +332,7 @@ public sealed class LiteWebServer : IAsyncDisposable
             catch (Exception ex) when (ex is HttpListenerException or ObjectDisposedException or InvalidOperationException)
             {
                 if (!_listener.IsListening) break;
+                LiteLogger.AcceptLoopRetry(Logger, ex.Message);
                 await Task.Delay(10, CancellationToken.None).ConfigureAwait(false);
                 continue;
             }
@@ -323,6 +350,7 @@ public sealed class LiteWebServer : IAsyncDisposable
 
         // 每请求一个 DI 作用域：作用域服务（如 DbContext）在请求结束时释放。
         // AsyncLocal 按逻辑调用链传播，同请求内多层 await 共享，跨请求隔离。
+        long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
         IDisposable? scope = null;
         IServiceProvider? previous = RequestScope.Current;
 
@@ -371,6 +399,7 @@ public sealed class LiteWebServer : IAsyncDisposable
             {
                 string allow = string.Join(", ", match.AllowedMethods);
                 response.Headers["Allow"] = allow;
+                LiteLogger.MethodNotAllowed(Logger, request.HttpMethod ?? "-", request.Url?.AbsolutePath ?? "/", allow);
                 await response.WriteAsync(
                     $"Method Not Allowed. Allowed: {allow}",
                     ContentTypes.Plain,
@@ -378,10 +407,13 @@ public sealed class LiteWebServer : IAsyncDisposable
                 return;
             }
 
+            LiteLogger.RouteNotFound(Logger, request.HttpMethod ?? "-", request.Url?.AbsolutePath ?? "/");
             await response.WriteAsync("Not Found", ContentTypes.Plain, 404).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
+            LiteLogger.UnhandledException(Logger, ex, request.HttpMethod ?? "-", request.Url?.AbsolutePath ?? "/");
+
             if (_exceptionObserver is not null)
             {
                 try { _exceptionObserver(ex, request); }
@@ -393,7 +425,44 @@ public sealed class LiteWebServer : IAsyncDisposable
         {
             RequestScope.Current = previous;
             scope?.Dispose();
+
+            WriteAccessLog(request, response, startedAt);
         }
+    }
+
+    /// <summary>
+    /// 写访问日志。放在 finally 中，确保异常路径也有记录。
+    /// 状态码在 <c>response.Close()</c> 之后仍可读取（已实测验证），故此处拿到的是终值。
+    /// </summary>
+    private void WriteAccessLog(HttpListenerRequest request, HttpListenerResponse response, long startedAt)
+    {
+        if (!AccessLog.Enabled) return;
+
+        string path = request.Url?.AbsolutePath ?? "/";
+        if (AccessLog.ExcludedPaths.Contains(path)) return;
+
+        double elapsedMs = System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+
+        if (AccessLog.SlowRequestThreshold > TimeSpan.Zero
+            && elapsedMs < AccessLog.SlowRequestThreshold.TotalMilliseconds)
+        {
+            return;
+        }
+
+        // 采样：高 QPS 下按比例丢弃访问日志，降低同步写盘开销。
+        if (!AccessLog.ShouldSample()) return;
+
+        // 默认不记 query string：避免 ?token= 等敏感参数落进日志。
+        if (AccessLog.IncludeQueryString && !string.IsNullOrEmpty(request.Url?.Query))
+        {
+            path += request.Url.Query;
+        }
+
+        int status = 0;
+        try { status = response.StatusCode; }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException) { }
+
+        LiteLogger.RequestCompleted(Logger, request.HttpMethod ?? "-", path, status, Math.Round(elapsedMs, 2));
     }
 
     /// <summary>写 500。若响应已开始写出则只能放弃连接。</summary>

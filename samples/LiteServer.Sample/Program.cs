@@ -2,12 +2,14 @@ using LiteServer;
 using LiteServer.Hosting;
 using LiteServer.Http;
 using LiteServer.Security;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LiteServer.Sample.Di;
 using LiteServer.Sample.Jobs;
 using LiteServer.Security;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LiteServer.Sample;
 
@@ -44,6 +46,8 @@ public static class Program
             o.TimestampFormat = "HH:mm:ss ";
         });
         builder.Logging.SetMinimumLevel(LogLevel.Information);
+        // 降低框架自身噪音，突出应用日志
+        builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
 
         // ===== 依赖注入验证：三种生命周期各注册一个 =====
         builder.Services.AddSingleton<SingletonCounter>();   // 全进程共享
@@ -79,6 +83,7 @@ public static class Program
                 options.AnonymousPaths.Add("/api/di");
                 options.AnonymousPaths.Add("/api/di/log");
                 options.AnonymousPaths.Add("/api/jobs");
+                options.AnonymousPaths.Add("/api/logs/info");
             },
             server =>
             {
@@ -87,6 +92,21 @@ public static class Program
             });
 
         using IHost host = builder.Build();
+
+        // 访问日志调优（演示）：
+        //   LITE_DISABLE_ACCESSLOG=1  → 完全关闭（压测对照）
+        //   LITE_ACCESSLOG_SAMPLE=10  → 每 10 条记 1 条
+        var srv0 = host.Services.GetRequiredService<LiteWebServer>();
+        if (Environment.GetEnvironmentVariable("LITE_DISABLE_ACCESSLOG") == "1")
+        {
+            srv0.AccessLog.Enabled = false;
+            Console.WriteLine("访问日志已关闭（对照实验）");
+        }
+        if (int.TryParse(Environment.GetEnvironmentVariable("LITE_ACCESSLOG_SAMPLE"), out int sample) && sample > 1)
+        {
+            srv0.AccessLog.SampleEvery = sample;
+            Console.WriteLine($"访问日志采样率：每 {sample} 条记 1 条");
+        }
 
         // 从容器里取出实例，注册 WebSocket 回调（需要用到 DI 里的服务时可在此注入）。
         var server = host.Services.GetRequiredService<LiteWebServer>();
@@ -114,6 +134,10 @@ public static class Program
         await using var server = new LiteWebServer();
         server.ServiceProvider = provider;   // 关键：交给服务器，之后每请求自动开作用域
 
+        // 独立模式下手动注入日志器（通用主机模式由 AddLiteServer 自动完成）
+        server.Logger = provider.GetRequiredService<ILogger<LiteWebServer>>();
+        server.WebSockets.Logger = provider.GetRequiredService<ILogger<LiteServer.WebSockets.WebSocketHub>>();
+
         server.EnableWebSocket = true;
         server.WebSockets.Options.EnableHeartbeat = true;
 
@@ -124,7 +148,8 @@ public static class Program
               .AllowAnonymous("/index.html")
               .AllowAnonymous("/api/di")
               .AllowAnonymous("/api/di/log")
-              .AllowAnonymous("/api/jobs");
+              .AllowAnonymous("/api/jobs")
+              .AllowAnonymous("/api/logs/info");
 
         // 中间件顺序即执行顺序
         server.UseCors();
@@ -142,8 +167,8 @@ public static class Program
         var jobs = provider.GetRequiredService<JobService>();
 
         // 顺序要与通用主机模式保持一致：静态先于鉴权。
-        server.UseStaticFiles("/", Path.Combine(AppContext.BaseDirectory, "wwwroot"));
-        server.UseJwtAuth(JwtSecret, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(30));
+        server.UseStaticFiles("/", Path.Combine(AppContext.BaseDirectory, "wwwroot"), 0, server.Logger);
+        server.UseJwtAuth(JwtSecret, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(30), server.Logger);
 
         await server.StartAsync("127.0.0.1", Port).ConfigureAwait(false);
 
@@ -416,6 +441,9 @@ public static class Program
             // 注意必须校验「解析后的 IP」，只查域名文本会被 nip.io 之类绕过。
             if (!SsrfGuard.IsSafe(target, out SsrfGuard.Verdict verdict))
             {
+                ILogger log = req.GetService<ILoggerFactory>()?.CreateLogger("LiteServer.Sample.Ssrf")
+                               ?? NullLogger.Instance;
+                LiteServer.Logging.LiteLogger.SsrfBlocked(log, target, verdict.ToString());
                 await res.WriteErrorAsync(400, $"url rejected: {verdict}").ConfigureAwait(false);
                 return;
             }

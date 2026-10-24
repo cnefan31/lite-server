@@ -150,6 +150,59 @@ server.MapGet("/api/di", (req, res) =>
 | `GET /api/di/log` | `ILogger<T>` 构造函数注入在 AOT 下可用 |
 | `GET/POST/DELETE /api/jobs[/{id}]` | 后台任务创建、进度轮询、取消，由 `BackgroundService` 承载 |
 
+## 日志
+
+库内所有关键路径都有结构化日志，基于 `Microsoft.Extensions.Logging` 抽象，
+不绑定具体 provider，且全程无反射（NativeAOT 下零 IL 警告）。
+
+| 事件 ID | 类别 | 内容 |
+|---|---|---|
+| 1001–1003 | 生命周期 | 启动（含 JIT/AOT 模式）、停止、监听重试 |
+| 2001–2003 | 请求 | 访问日志（方法/路径/状态/耗时）、404、405 |
+| 3001–3002 | 异常 | 未捕获异常（含堆栈）、响应已开始的降级 |
+| 4001 | 鉴权 | 鉴权失败及具体原因（缺 token / 验签失败 / 已吊销） |
+| 5001–5002 | 静态文件 | dotfile 拒绝、越权路径拒绝 |
+| 6001–6005 | WebSocket | 连接建立/关闭、超限拒绝、消息过大、心跳超时 |
+| 7001–7003 | 安全 | SSRF 拦截、限流触发、CORS 拒绝 |
+
+### 接入方式
+
+**通用主机模式**（自动注入，无需额外代码）：
+
+```csharp
+builder.Logging.AddSimpleConsole();
+builder.Services.AddLiteServer(...);   // 自动把 ILogger<LiteWebServer> 注入库内部
+```
+
+**独立模式**（手动注入，不注入则降级为 `NullLogger`，零开销）：
+
+```csharp
+server.Logger = provider.GetRequiredService<ILogger<LiteWebServer>>();
+server.WebSockets.Logger = provider.GetRequiredService<ILogger<LiteWebSocketHub>>();
+```
+
+### 访问日志的安全默认值
+
+| 选项 | 默认 | 原因 |
+|---|---|---|
+| `IncludeQueryString` | `false` | 防止 `?token=` 等敏感参数落进日志（已实测确认不泄露） |
+| `ExcludedPaths` | `{"/api/health"}` | 探活与压测会把日志刷满 |
+| `SlowRequestThreshold` | `0`（全记） | 需要降量时设为如 100ms，只记慢请求 |
+| `SampleEvery` | `1`（全记） | 高 QPS 时设为 10–100 抽样 |
+
+### 性能影响（实测）
+
+同步写文件的访问日志有实际成本，本机测量（`/api/runtime`，2000 请求 / 并发 50）：
+
+| 配置 | 吞吐 | 相对无日志 |
+|---|---|---|
+| 关闭访问日志 | ~32,500 req/s | — |
+| 全量记录 | ~24,800 req/s | **-24%** |
+| 采样 1/20 | ~31,800 req/s | -2% |
+
+结论：**高 QPS 场景建议开采样或设慢请求阈值**，默认全记适合开发与低流量服务。
+若日志量大，改用异步写入的 provider（如 Serilog Async）比调采样更有效。
+
 ## 性能
 
 仓库带两个压测脚本（依赖 [hey](https://github.com/rakyll/hey)）：

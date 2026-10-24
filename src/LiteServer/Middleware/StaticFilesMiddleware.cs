@@ -1,6 +1,9 @@
 using System.Net;
 using LiteServer.Routing;
 using LiteServer.Http;
+using LiteServer.Logging;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LiteServer.Middleware;
 
@@ -20,6 +23,9 @@ public sealed class StaticFilesMiddleware
     private readonly string _urlPrefix;
     private readonly string _rootFullPath;
     private readonly int _maxAgeSeconds;
+
+    /// <summary>日志器。默认 NullLogger，零开销。</summary>
+    public ILogger Logger { get; set; } = NullLogger.Instance;
 
     /// <param name="urlPrefix">对外路由前缀，如 "/" 或 "/assets"。</param>
     /// <param name="rootFolder">本地文件夹。</param>

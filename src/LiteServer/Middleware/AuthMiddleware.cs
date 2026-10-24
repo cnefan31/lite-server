@@ -1,6 +1,9 @@
 using System.Net;
 using LiteServer.Http;
+using LiteServer.Logging;
 using LiteServer.Security;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LiteServer.Security;
 
@@ -14,7 +17,7 @@ public static class AuthMiddleware
     /// 新代码更推荐 <see cref="Jwt"/> 或 <see cref="BearerToken"/>，后者会剥离前缀。
     /// </para>
     /// </summary>
-    public static Middleware.MiddlewareDelegate SimpleToken(string expectedToken, IReadOnlySet<string> whiteList)
+    public static Middleware.MiddlewareDelegate SimpleToken(string expectedToken, IReadOnlySet<string> whiteList, ILogger? logger = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(expectedToken);
         ArgumentNullException.ThrowIfNull(whiteList);
@@ -29,13 +32,14 @@ public static class AuthMiddleware
                 return Task.FromResult(true);
             }
 
+            LiteLogger.AuthRejected(logger ?? NullLogger.Instance, request.HttpMethod ?? "-", request.Url?.AbsolutePath ?? "/", "token 不匹配");
             response.StatusCode = 401;
             return DenyAsync(response);
         };
     }
 
     /// <summary>Bearer Token 校验：剥离 `Bearer ` 前缀后比对。</summary>
-    public static Middleware.MiddlewareDelegate BearerToken(string expectedToken, IReadOnlySet<string> whiteList)
+    public static Middleware.MiddlewareDelegate BearerToken(string expectedToken, IReadOnlySet<string> whiteList, ILogger? logger = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(expectedToken);
         ArgumentNullException.ThrowIfNull(whiteList);
@@ -62,11 +66,13 @@ public static class AuthMiddleware
     /// <param name="whiteList">免鉴权路径集合。</param>
     /// <param name="blacklist">可选的吊销名单。</param>
     /// <param name="clockSkew">允许的时钟偏移。</param>
+    /// <param name="logger">日志器，用于记录鉴权失败原因。</param>
     public static Middleware.MiddlewareDelegate Jwt(
         string secret,
         IReadOnlySet<string> whiteList,
         TokenBlacklist? blacklist = null,
-        TimeSpan? clockSkew = null)
+        TimeSpan? clockSkew = null,
+        ILogger? logger = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(secret);
         ArgumentNullException.ThrowIfNull(whiteList);
@@ -76,14 +82,23 @@ public static class AuthMiddleware
             if (IsWhiteListed(request, whiteList)) return Task.FromResult(true);
 
             string? token = request.ExtractToken();
-            if (string.IsNullOrEmpty(token) || !Security.Jwt.Verify(token, secret, clockSkew))
+            if (string.IsNullOrEmpty(token))
             {
+                LiteLogger.AuthRejected(logger ?? NullLogger.Instance, request.HttpMethod ?? "-", request.Url?.AbsolutePath ?? "/", "缺少 token");
+                response.StatusCode = 401;
+                return DenyAsync(response);
+            }
+
+            if (!Security.Jwt.Verify(token, secret, clockSkew))
+            {
+                LiteLogger.AuthRejected(logger ?? NullLogger.Instance, request.HttpMethod ?? "-", request.Url?.AbsolutePath ?? "/", "签名或有效期校验失败");
                 response.StatusCode = 401;
                 return DenyAsync(response);
             }
 
             if (blacklist is not null && blacklist.Contains(token))
             {
+                LiteLogger.AuthRejected(logger ?? NullLogger.Instance, request.HttpMethod ?? "-", request.Url?.AbsolutePath ?? "/", "token 已吊销");
                 response.StatusCode = 401;
                 return DenyAsync(response);
             }

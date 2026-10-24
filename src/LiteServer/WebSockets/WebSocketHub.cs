@@ -3,6 +3,9 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
+using LiteServer.Logging;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace LiteServer.WebSockets;
 
@@ -69,6 +72,9 @@ public sealed class WebSocketHub : IAsyncDisposable
 
     public WebSocketOptions Options => _options;
 
+    /// <summary>日志器。默认 NullLogger，零开销。</summary>
+    public ILogger Logger { get; set; } = NullLogger.Instance;
+
     /// <summary>当前在线客户端标识。</summary>
     public string[] OnlineClients() => _connections.Keys.ToArray();
 
@@ -85,6 +91,7 @@ public sealed class WebSocketHub : IAsyncDisposable
 
         if (_connections.Count >= _options.MaxConnections)
         {
+            LiteLogger.WebSocketRejected(Logger, _options.MaxConnections);
             response.StatusCode = 503;
             response.ContentLength64 = 0;
             response.Close();
@@ -108,6 +115,7 @@ public sealed class WebSocketHub : IAsyncDisposable
 
             Touch(clientId);
             EnsureHeartbeatRunning();
+            LiteLogger.WebSocketConnected(Logger, clientId, _connections.Count);
 
             if (OnConnectionChanged is not null)
             {
@@ -171,6 +179,8 @@ public sealed class WebSocketHub : IAsyncDisposable
             }
             if (buffer is not null) ArrayPool<byte>.Shared.Return(buffer);
 
+            LiteLogger.WebSocketDisconnected(Logger, clientId, _connections.Count);
+
             if (OnConnectionChanged is not null)
             {
                 try { await OnConnectionChanged(clientId, false).ConfigureAwait(false); }
@@ -198,6 +208,7 @@ public sealed class WebSocketHub : IAsyncDisposable
         {
             if (ms.Length > _options.MaxMessageBytes)
             {
+                LiteLogger.WebSocketMessageTooLarge(Logger, "-");
                 await TryCloseAsync(socket, WebSocketCloseStatus.MessageTooBig, "Message too large").ConfigureAwait(false);
                 return null;
             }
@@ -325,6 +336,7 @@ public sealed class WebSocketHub : IAsyncDisposable
                 // 超时：摘出连接并关闭。
                 if (_connections.TryRemove(kv.Key, out WebSocket? socket))
                 {
+                    LiteLogger.WebSocketHeartbeatTimeout(Logger, kv.Key);
                     await TryCloseAsync(socket, WebSocketCloseStatus.PolicyViolation, "Heartbeat timeout").ConfigureAwait(false);
                     try { socket.Dispose(); } catch (ObjectDisposedException) { }
                 }

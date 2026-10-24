@@ -325,7 +325,8 @@ footer{
     <a href="#s5">实时流</a>
     <a href="#s6">其它</a>
     <a href="#s7">DI 与后台任务</a>
-    <a href="#s8">全量自测</a>
+    <a href="#s8">日志</a>
+    <a href="#s9">全量自测</a>
   </nav>
 
   <!-- ① 鉴权 -->
@@ -473,9 +474,28 @@ footer{
     </div>
   </section>
 
-  <!-- ⑧ 全量自测 -->
+  <!-- ⑧ 日志 -->
   <section class="sec" id="s8">
-    <div class="sec-hd"><span class="num">08</span><h2>全量自测</h2></div>
+    <div class="sec-hd"><span class="num">08</span><h2>日志</h2></div>
+    <p class="sec-desc">
+      库内所有关键路径都有结构化日志：请求、异常、鉴权失败、路由未命中、
+      静态文件拒绝、WebSocket 生命周期、SSRF 拦截。
+      默认不记录查询串，避免 token 落盘；健康检查不产生日志。
+    </p>
+    <div class="group">
+      <div class="bar">
+        <button data-call="log-info">查看日志配置</button>
+        <button data-call="log-trigger-auth" class="quiet">触发鉴权失败（看 warn）</button>
+        <button data-call="log-trigger-404" class="quiet">触发 404</button>
+        <button data-call="log-trigger-dotfile" class="quiet">触发 dotfile 拒绝</button>
+      </div>
+      <pre class="out" id="out-log" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ⑨ 全量自测 -->
+  <section class="sec" id="s9">
+    <div class="sec-hd"><span class="num">09</span><h2>全量自测</h2></div>
     <p class="sec-desc">23 项断言，覆盖全部端点与失败路径，含一条 WebSocket 回声。逐项比对实际状态码与预期。</p>
     <div class="group">
       <div class="bar">
@@ -913,6 +933,39 @@ async function doJobCancel() {
   render("out-di", r, "取消请求已发出");
 }
 
+/* ---------------- ⑧ 日志 ---------------- */
+async function doLogInfo() {
+  const r = await call("GET", "/api/logs/info", { expect: 200 });
+  if (!r.ok) return render("out-log", r);
+  const d = r.parsed;
+  const ranges = Object.entries(d.eventRanges || {}).map(([k, v]) => `    ${k.padEnd(16)} ${v}xxx`).join("\n");
+  show("out-log",
+    `200 · ${r.ms} ms · 符合预期\nGET /api/logs/info\n\n` +
+    `访问日志启用: ${d.enabled}\n` +
+    `记录查询串:   ${d.includeQueryString}（false 可防止 token 落日志）\n` +
+    `慢请求阈值:   ${d.slowThresholdMs} ms（0 = 全记）\n` +
+    `排除路径:     ${(d.excludedPaths || []).join(", ") || "（无）"}\n` +
+    `日志器实现:   ${d.loggerType}\n\n事件 ID 分段:\n${ranges}`);
+}
+
+async function doLogTrigger(kind) {
+  if (kind === "auth") {
+    // 不带 token 请求受保护端点 -> 服务端应记 warn 鉴权失败
+    const r = await fetch(url("/api/tasks"), { method: "GET" });
+    show("out-log",
+      `触发鉴权失败 → ${r.status}\n\n` +
+      `服务端日志应出现：\n  warn LiteServer.LiteWebServer[4001] 鉴权失败：GET /api/tasks（缺少 token）`);
+  } else if (kind === "404") {
+    const r = await call("GET", "/api/log-probe-404", { expect: 404 });
+    show("out-log", `${r.status} → 服务端日志应出现 [2002] 路由未命中`);
+  } else {
+    const r = await fetch(url("/.canary"), { headers: S.token ? { Authorization: "Bearer " + S.token } : {} });
+    show("out-log",
+      `触发 dotfile 访问 → ${r.status}\n\n` +
+      `服务端日志应出现：\n  warn LiteServer.LiteWebServer[5001] 拒绝 dotfile 访问：/.canary`);
+  }
+}
+
 /* ---------------- ⑦ 全量自测 ---------------- */
 const CASES = [
   ["health 存活", "GET", "/api/health", 200, false],
@@ -1042,6 +1095,10 @@ const DISPATCH = {
   "job-get": doJobGet,
   "job-list": doJobList,
   "job-cancel": doJobCancel,
+  "log-info": doLogInfo,
+  "log-trigger-auth": () => doLogTrigger("auth"),
+  "log-trigger-404": () => doLogTrigger("404"),
+  "log-trigger-dotfile": () => doLogTrigger("dotfile"),
 };
 
 document.addEventListener("click", e => {
