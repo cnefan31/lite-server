@@ -1,4 +1,4 @@
-# LiteServer 文档
+# NanoServer 文档
 
 | 文档 | 内容 | 适合谁读 |
 |---|---|---|
@@ -28,7 +28,7 @@
 
 **上传大小限制** → CONFIGURATION § 十、文件传输（库不限制，需业务层做）
 
-**后台推送前端** → README「服务端主动推送」/ `samples/LiteServer.Sample/Push/`
+**后台推送前端** → README「服务端主动推送」/ `samples/NanoServer.Sample/Push/`
 
 ## 实测数据说明
 

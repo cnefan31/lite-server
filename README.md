@@ -1,11 +1,11 @@
-# LiteServer
+# NanoServer
 
 零依赖的轻量 .NET Web 能力库。基于 `System.Net.HttpListener`，不需要 IIS / Kestrel，
 可嵌入任何 .NET 应用，也可作为独立服务运行。支持 **.NET 通用主机（Generic Host）** 与 **NativeAOT**。
 
 ```csharp
-await using var server = new LiteWebServer();
-server.MapGet("/hello", (req, res) => res.WriteAsync("Hello LiteServer"));
+await using var server = new NanoWebServer();
+server.MapGet("/hello", (req, res) => res.WriteAsync("Hello NanoServer"));
 await server.StartAsync("127.0.0.1", 8090);
 ```
 
@@ -21,7 +21,7 @@ await server.StartAsync("127.0.0.1", 8090);
 
 ## 来源说明
 
-LiteServer 的能力边界参考了 **PicoServer**（作者 juziyu，https://picoserver.cn/）——
+NanoServer 的能力边界参考了 **PicoServer**（作者 juziyu，https://picoserver.cn/）——
 包括其公开文档、NuGet 包对外暴露的 API 形态，以及在实际项目中对它的行为实测结论。
 
 **代码是独立重写的**：本仓库不含 PicoServer 的任何反编译产物或原始实现，全部源码为原创。
@@ -41,7 +41,7 @@ PicoServer 的名称与实现归原作者所有，本项目与其无隶属或授
 
 ## 相对 PicoServer 的改进
 
-在完整对齐其能力的前提下，这些是 LiteServer 重新设计、而非沿用其做法的地方：
+在完整对齐其能力的前提下，这些是 NanoServer 重新设计、而非沿用其做法的地方：
 
 - **同路径可注册多个方法**。常见做法是以路径为唯一键存处理器，第二个注册会被静默忽略；
   本项目的路由表以 (路径, 方法) 为组合键，GET/POST/PUT/DELETE 可共存。
@@ -72,12 +72,12 @@ options.StaticFilesBeforeAuth = true;   // 静态先跑：dotfile 由静态层�
 与 DI、配置、日志、健康检查、优雅停机共用同一套 .NET 宿主。
 
 ```csharp
-using LiteServer;
-using LiteServer.Hosting;
+using NanoServer;
+using NanoServer.Hosting;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.Services.AddLiteServer(
+builder.Services.AddNanoServer(
     options =>
     {
         options.Host = "127.0.0.1";
@@ -99,7 +99,7 @@ await builder.Build().RunAsync();
 拿到容器中的实例即可注册路由、挂 WebSocket 回调：
 
 ```csharp
-var server = host.Services.GetRequiredService<LiteWebServer>();
+var server = host.Services.GetRequiredService<NanoWebServer>();
 server.WebSockets.OnMessage = async (id, msg, reply) => await reply($"echo:{msg}");
 ```
 
@@ -108,7 +108,7 @@ server.WebSockets.OnMessage = async (id, msg, reply) => await reply($"echo:{msg}
 不引入通用主机，自建生命周期：
 
 ```csharp
-await using var server = new LiteWebServer();
+await using var server = new NanoWebServer();
 server.UseCors();
 server.MapGet("/api/health", (req, res) => res.WriteAsync("ok"));
 server.UseJwtAuth("your-secret");
@@ -120,11 +120,11 @@ await Task.Delay(Timeout.Infinite);   // 或用 Ctrl+C 驱动
 
 ## 依赖注入与后台任务
 
-`AddLiteServer` 会把根容器交给服务器，**每个请求创建独立作用域**，处理器内直接解析服务。
-DI 相关扩展方法都在根命名空间 `LiteServer` 下，`using LiteServer;` 一行即可：
+`AddNanoServer` 会把根容器交给服务器，**每个请求创建独立作用域**，处理器内直接解析服务。
+DI 相关扩展方法都在根命名空间 `NanoServer` 下，`using NanoServer;` 一行即可：
 
 ```csharp
-using LiteServer;          // RequireService / GetService / Services 扩展
+using NanoServer;          // RequireService / GetService / Services 扩展
 
 builder.Services.AddSingleton<SingletonCounter>();
 builder.Services.AddScoped<ScopedStamp>();      // 每请求一个
@@ -201,12 +201,12 @@ public sealed class PushService : BackgroundService
     }
 }
 
-// 注册（需在 AddLiteServer 之后，见下方「停止顺序」）
+// 注册（需在 AddNanoServer 之后，见下方「停止顺序」）
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PushService>());
 ```
 
-`AddLiteServer` 会把服务器的 `WebSocketHub` 注册进容器，后台服务直接构造函数注入即可使用。
+`AddNanoServer` 会把服务器的 `WebSocketHub` 注册进容器，后台服务直接构造函数注入即可使用。
 
 控制端点：
 
@@ -219,10 +219,10 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PushService>());
 ### 停止顺序（容易踩的坑）
 
 .NET 通用主机的 **HostedService 停止顺序与注册顺序相反**（后注册先停）。
-若 `LiteServerHost` 后注册，它会先停止并关闭所有 WebSocket，
+若 `NanoServerHost` 后注册，它会先停止并关闭所有 WebSocket，
 导致推送服务已无法发出「服务停止」通知——客户端只会看到连接静默断开。
 
-实测验证：把 `AddLiteServer` 放在最前注册，`PushService` 注册在它之后，
+实测验证：把 `AddNanoServer` 放在最前注册，`PushService` 注册在它之后，
 停机时客户端就能收到 `{"kind":"notice","payload":{"message":"服务正在停止"}}`。
 
 ### 前端展示
@@ -251,13 +251,13 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PushService>());
 
 ```csharp
 builder.Logging.AddSimpleConsole();
-builder.Services.AddLiteServer(...);   // 自动把 ILogger<LiteWebServer> 注入库内部
+builder.Services.AddNanoServer(...);   // 自动把 ILogger<NanoWebServer> 注入库内部
 ```
 
 **独立模式**（手动注入，不注入则降级为 `NullLogger`，零开销）：
 
 ```csharp
-server.Logger = provider.GetRequiredService<ILogger<LiteWebServer>>();
+server.Logger = provider.GetRequiredService<ILogger<NanoWebServer>>();
 server.WebSockets.Logger = provider.GetRequiredService<ILogger<LiteWebSocketHub>>();
 ```
 
@@ -357,7 +357,7 @@ token 黑名单、CRLF 头注入、WebSocket 握手鉴权与消息大小上限�
 自带 SSRF 防护组件 `SsrfGuard`（用于按用户 URL 发起请求的场景）：
 
 ```csharp
-using LiteServer.Security;
+using NanoServer.Security;
 
 if (!SsrfGuard.IsSafe(userUrl, out SsrfGuard.Verdict verdict))
 {
@@ -392,20 +392,20 @@ if (!SsrfGuard.IsSafe(userUrl, out SsrfGuard.Verdict verdict))
 
 ```bash
 # 通用主机模式
-dotnet run --project samples/LiteServer.Sample
+dotnet run --project samples/NanoServer.Sample
 
 # 独立模式
-dotnet run --project samples/LiteServer.Sample -- --standalone
+dotnet run --project samples/NanoServer.Sample -- --standalone
 
 # AOT 发布
-dotnet publish samples/LiteServer.Sample -c Release -r osx-arm64 -o dist
+dotnet publish samples/NanoServer.Sample -c Release -r osx-arm64 -o dist
 ```
 
 ## 目录结构
 
 ```
-src/LiteServer/
-  LiteWebServer.cs            服务器主体：路由/中间件/WS/生命周期
+src/NanoServer/
+  NanoWebServer.cs            服务器主体：路由/中间件/WS/生命周期
   Http/ContentTypes.cs        MIME 映射
   Http/RequestExtensions.cs   请求读取
   Http/ResponseExtensions.cs  响应写出
@@ -421,7 +421,7 @@ src/LiteServer/
   WebSockets/WebSocketHub.cs  连接管理
   RequestScope.cs             每请求 DI 作用域（根命名空间）
   Hosting/                    通用主机集成
-samples/LiteServer.Sample/    双模式示例
+samples/NanoServer.Sample/    双模式示例
 ```
 
 ## 许可

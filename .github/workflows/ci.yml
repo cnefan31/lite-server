@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build-test:
+    name: 构建与测试
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dotnet: ['10.0.x']
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ matrix.dotnet }}
+
+      - name: 还原
+        run: dotnet restore NanoServer.slnx
+
+      - name: 构建（Release，警告视为错误）
+        run: dotnet build NanoServer.slnx -c Release --no-restore /p:WarningsAsErrors=CS /p:TreatWarningsAsErrors=false
+
+      - name: 打包
+        run: dotnet pack src/NanoServer/NanoServer.csproj -c Release --no-build -o artifacts
+
+      - name: 上传包产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+          retention-days: 7
+
+      - name: 运行示例并执行安全回归
+        run: |
+          dotnet samples/NanoServer.Sample/bin/Release/net10.0/nano-sample.dll &
+          echo "等待服务就绪…"
+          for i in $(seq 1 40); do
+            if curl -sf -o /dev/null http://127.0.0.1:8090/api/health; then
+              echo "服务已就绪"
+              break
+            fi
+            sleep 0.5
+          done
+          if ! curl -sf -o /dev/null http://127.0.0.1:8090/api/health; then
+            echo "::error::服务未能启动"
+            exit 1
+          fi
+          chmod +x tools/security-test.sh
+          ./tools/security-test.sh http://127.0.0.1:8090 nano-sample-secret
+          pkill -f nano-sample || true

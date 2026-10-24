@@ -1,4 +1,4 @@
-# LiteServer 配置与调优手册
+# NanoServer 配置与调优手册
 
 本手册列出**全部可配置参数**、默认值、取值边界与调优建议。
 所有数值均为 macOS arm64 / .NET 10.0.5 实测结果，原始数据见 [OPTIMIZATION.md](OPTIMIZATION.md)。
@@ -7,7 +7,7 @@
 
 ---
 
-## 一、宿主与监听（LiteServerOptions）
+## 一、宿主与监听（NanoServerOptions）
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -27,21 +27,21 @@ options.Port = 8090;
 
 ---
 
-## 二、WebSocket（LiteServerOptions + WebSocketOptions）
+## 二、WebSocket（NanoServerOptions + WebSocketOptions）
 
-`LiteServerOptions` 只暴露最常用的三项，其余需直接设置 `server.WebSockets.Options`。
+`NanoServerOptions` 只暴露最常用的三项，其余需直接设置 `server.WebSockets.Options`。
 
 | 参数 | 所在类 | 类型 | 默认值 | 说明 |
 |---|---|---|---|---|
-| `EnableWebSocket` | `LiteServerOptions` | `bool` | `false` | 是否启用。与 HTTP 共用同一端口 |
-| `WebSocketMaxConnections` | `LiteServerOptions` | `int` | `1000` | 最大并发连接，超出返回 503 |
-| `EnableWebSocketHeartbeat` | `LiteServerOptions` | `bool` | `false` | 心跳超时检测（关闭时零后台开销） |
-| `WebSocketHeartbeatTimeout` | `LiteServerOptions` | `TimeSpan` | 30 秒 | 多久没收到任何帧即判掉线 |
+| `EnableWebSocket` | `NanoServerOptions` | `bool` | `false` | 是否启用。与 HTTP 共用同一端口 |
+| `WebSocketMaxConnections` | `NanoServerOptions` | `int` | `1000` | 最大并发连接，超出返回 503 |
+| `EnableWebSocketHeartbeat` | `NanoServerOptions` | `bool` | `false` | 心跳超时检测（关闭时零后台开销） |
+| `WebSocketHeartbeatTimeout` | `NanoServerOptions` | `TimeSpan` | 30 秒 | 多久没收到任何帧即判掉线 |
 | `HeartbeatInterval` | `WebSocketOptions` | `TimeSpan` | 5 秒 | 心跳巡检间隔 |
 | `PingText` | `WebSocketOptions` | `string` | `"ping"` | 收到该文本视为心跳，不转交业务 |
 | `ReceiveBufferSize` | `WebSocketOptions` | `int` | `4096` | 单帧接收缓冲，从 `ArrayPool` 租借 |
 | `MaxMessageBytes` | `WebSocketOptions` | `int` | 4 MB | 单条消息上限，超出即断开 |
-| `MaxConnections` | `WebSocketOptions` | `int` | `1000` | 实际生效值（`LiteServerOptions` 会覆盖它） |
+| `MaxConnections` | `WebSocketOptions` | `int` | `1000` | 实际生效值（`NanoServerOptions` 会覆盖它） |
 
 **调优建议**
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# LiteServer 性能压测脚本。
+# NanoServer 性能压测脚本。
 #
 # 前置：安装 hey
 #   macOS:  brew install hey
@@ -26,7 +26,7 @@ ROUNDS="${4:-5}"
 
 command -v hey >/dev/null 2>&1 || { echo "需要 hey：brew install hey"; exit 1; }
 
-API_KEY="${LITE_BENCH_API_KEY:-lite-sample-secret}"
+API_KEY="${LITE_BENCH_API_KEY:-nano-sample-secret}"
 TOKEN=$(curl -sS -X POST "$BASE/api/login" -d "{\"apiKey\":\"$API_KEY\"}" 2>/dev/null \
         | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
 
@@ -51,7 +51,7 @@ measure() {
 row() { printf '  %-26s' "$1"; }
 
 line
-echo "LiteServer 压测   目标 $BASE   每轮 $N 请求 / 并发 $C / $ROUNDS 轮取中位数"
+echo "NanoServer 压测   目标 $BASE   每轮 $N 请求 / 并发 $C / $ROUNDS 轮取中位数"
 line
 printf '  %-26s %s\n' "负载(压测前)" "$(uptime | sed 's/.*load averages: //')"
 

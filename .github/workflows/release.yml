@@ -1,0 +1,112 @@
+name: Release to NuGet
+
+# 触发方式：推送形如 v1.0.0 的 tag 时自动发布
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  release:
+    name: 打包并发布
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # 创建 GitHub Release 需要
+      id-token: write     # NuGet Trusted Publishing（可选）
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 从 tag 推导版本号
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          # 校验语义化版本：MAJOR.MINOR.PATCH，可带 -preview.1 这类后缀
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag '$TAG' 不是合法语义化版本（应形如 v1.0.0 或 v1.0.0-beta.1）"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "解析出版本号：$VERSION"
+
+      - name: 还原
+        run: dotnet restore NanoServer.slnx
+
+      - name: 构建（警告视为错误）
+        run: dotnet build NanoServer.slnx -c Release --no-restore /p:WarningsAsErrors=CS /p:TreatWarningsAsErrors=false /p:Version=${{ steps.ver.outputs.version }}
+
+      - name: 运行示例并执行安全回归
+        run: |
+          dotnet samples/NanoServer.Sample/bin/Release/net10.0/nano-sample.dll &
+          for i in $(seq 1 40); do
+            curl -sf -o /dev/null http://127.0.0.1:8090/api/health && break
+            sleep 0.5
+          done
+          if ! curl -sf -o /dev/null http://127.0.0.1:8090/api/health; then
+            echo "::error::服务未能启动，中止发布"
+            exit 1
+          fi
+          chmod +x tools/security-test.sh
+          ./tools/security-test.sh http://127.0.0.1:8090 nano-sample-secret
+          pkill -f nano-sample || true
+
+      - name: 打包
+        run: dotnet pack src/NanoServer/NanoServer.csproj -c Release --no-build -o artifacts /p:Version=${{ steps.ver.outputs.version }}
+
+      - name: 校验包内容
+        run: |
+          echo "=== 产物 ==="
+          ls -la artifacts/
+          NUPKG=$(ls artifacts/*.nupkg | head -1)
+          echo "=== 包内文件 ==="
+          unzip -l "$NUPKG"
+
+      - name: 发布到 NuGet.org
+        run: |
+          NUPKG=$(ls artifacts/*.nupkg | head -1)
+          SNPUPKG=$(ls artifacts/*.snupkg 2>/dev/null | head -1 || true)
+          dotnet nuget push "$NUPKG" \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+          if [ -n "$SNUPKG" ]; then
+            dotnet nuget push "$SNUPKG" \
+              --api-key "${{ secrets.NUGET_API_KEY }}" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate || echo "符号包推送失败（不影响主包）"
+          fi
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+          generate_release_notes: true
+          body: |
+            ## 安装
+
+            ```bash
+            dotnet add package NanoServer --version ${{ steps.ver.outputs.version }}
+            ```
+
+            ## 文档
+
+            - [API 手册](https://github.com/cnefan31/lite-server/blob/main/docs/API.md)
+            - [配置与调优手册](https://github.com/cnefan31/lite-server/blob/main/docs/CONFIGURATION.md)
+            - [安全审计报告](https://github.com/cnefan31/lite-server/blob/main/docs/SECURITY-AUDIT.md)
+
+            包内也包含 `README.md` 与 `docs/` 两份手册。

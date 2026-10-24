@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <AssemblyName>NanoServer</AssemblyName>
+    <RootNamespace>NanoServer</RootNamespace>
+
+    <!-- NativeAOT：全库不使用反射 -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+
+  <!-- ==================== NuGet 包元数据 ==================== -->
+  <PropertyGroup>
+    <PackageId>NanoServer</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>cnefan31</Authors>
+    <Company>cnefan31</Company>
+    <Product>NanoServer</Product>
+    <Description>零依赖的轻量 .NET Web 能力库：路由、中间件、静态文件、JWT/SSRF 防护、WebSocket、结构化日志、每请求 DI 作用域，支持 .NET 通用主机与 NativeAOT。</Description>
+    <PackageTags>webserver;http;httplistener;websocket;sse;aot;nativeaot;minimal;lightweight;jwt</PackageTags>
+    <PackageProjectUrl>https://github.com/cnefan31/lite-server</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/cnefan31/lite-server.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+
+    <!-- 源码链接与符号：便于调试 -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- 可重现构建 -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 仅引用抽象包：不引入任何运行时实现，保持「零依赖」承诺 -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- NuGet 包内展示 README -->
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../docs/API.md" Pack="true" PackagePath="docs/" />
+    <None Include="../../docs/CONFIGURATION.md" Pack="true" PackagePath="docs/" />
+  </ItemGroup>
+
+</Project>
