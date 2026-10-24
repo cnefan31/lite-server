@@ -6,42 +6,68 @@
 
 ## 一、一次性配置（必须）
 
-### 1. 在 NuGet.org 创建 API Key
+本项目使用 **NuGet 受信任发布（Trusted Publishing）**：不保存任何长期 API Key，
+由 GitHub Actions 的 OIDC 令牌临时换取一次性密钥。官方文档：
+https://learn.microsoft.com/zh-cn/nuget/nuget-org/trusted-publishing
 
-1. 登录 https://www.nuget.org/ ，用 GitHub 账号（cnefan31）即可
-2. 进入 **Account → API keys → Create**
-3. 按以下填写：
+### 1. 在 nuget.org 配置受信任发布策略
+
+登录 https://www.nuget.org/ → 点用户名 → **受信任的发布** → 添加新策略。
+
+本仓库对应填法（**已配置完成**，此处记录以便核对）：
 
 | 字段 | 值 |
 |---|---|
-| Key name | `github-actions-nanoserver` |
-| Expiration | 建议 365 天（到期前需更换） |
-| Scopes | **Push new packages and package versions** |
-| Glob pattern | `NanoServer` |
+| 策略名称 | `NanoServer` |
+| Package owner | `cnefan31` |
+| Scopes | Push new packages and package versions |
+| Glob Patterns | `NanoServer*` |
+| Publisher | GitHub Actions |
+| Repository Owner | `cnefan31`（ID 71433755） |
+| Repository | `lite-server`（ID 1431294409） |
+| Workflow | `release.yml` |
+| Environment | `release` |
 
-> **Glob pattern 只填 `NanoServer`**，不要用 `*`——限制该 key 只能推这一个包，泄露时影响面最小。
+> **三处必须与 workflow 严格对应**，任一不符 OIDC 验证就会失败：
+> 1. `Workflow` 只写**文件名** `release.yml`，不含 `.github/workflows/` 路径
+> 2. `Repository` 是 `lite-server`（仓库名），不是包名
+> 3. `Environment` 为 `release` → workflow 的 job 必须声明 `environment: release`
 
-4. 创建后**立刻复制** key（形如 `oy2abc...`，只显示一次）
+### 2. 在 GitHub 仓库添加 `NUGET_USER` 秘密
 
-### 2. 在 GitHub 仓库添加 Secret
+临时密钥换取需要提供 nuget.org 的**用户名（profile name）**，**不是邮箱**。
 
 1. 打开 https://github.com/cnefan31/lite-server/settings/secrets/actions
 2. **New repository secret**
-3. Name 填 `NUGET_API_KEY`（大小写必须完全一致）
-4. Secret 粘贴上一步的 key
+3. Name 填 `NUGET_USER`
+4. Secret 填你的 nuget.org 用户名（本仓库为 `cnefan31`，可在
+   https://www.nuget.org/account 页面确认）
 
-> workflow 里引用的是 `${{ secrets.NUGET_API_KEY }}`，名称不匹配会推送失败。
+> 这是唯一需要配置的 secret。**不再需要 `NUGET_API_KEY`** ——
+> 若之前建过，可以删掉。
 
-### 3. 确认包名可用性（建议定期复查）
+### 3. GitHub Environment
+
+策略里 Environment 填了 `release`，因此仓库需存在同名 environment（**已创建**）：
+
+```bash
+# 查看
+gh api repos/cnefan31/lite-server/environments --jq '.environments[].name'
+
+# 若不存在则创建
+gh api -X PUT repos/cnefan31/lite-server/environments/release
+```
+
+若希望发布前需人工批准，可给该 environment 加 Required reviewers（可选）。
+
+### 4. 确认包名可用性
 
 ```bash
 # 200 = 已占用，404 = 可用
 curl -sS -o /dev/null -w "%{http_code}\n" https://api.nuget.org/v3-flatcontainer/nanoserver/index.json
 ```
 
-当前状态：**404（可用）**。若日后被占用，需改 `PackageId` 并重新配置。
-
----
+当前状态：**404（可用）**。
 
 ## 二、发布流程
 
@@ -106,7 +132,7 @@ git push origin v1.0.0-beta.1
 | 创建 GitHub Release | — | ⬜ 依赖上一步 |
 
 > 验证方式：推送 `v1.0.0-beta.1` tag 触发真实运行，确认前 9 步成功后删除该 tag
-> （NuGet 上未留下任何版本）。**配置好 `NUGET_API_KEY` 后即可正式发布。**
+> （NuGet 上未留下任何版本）。**配置好受信任发布策略与 `NUGET_USER` 后即可正式发布。**
 
 ## 三、本地打包（不上传）
 
@@ -132,20 +158,32 @@ unzip -l artifacts/NanoServer.*.nupkg
 
 ---
 
-## 四、手动发布（workflow 出问题时的兜底）
+## 四、手动发布（兜底）
+
+受信任发布的设计目标是**消除长期密钥**，因此手动发布若也用 OIDC 会比较绕。
+两种兜底方式：
+
+**方式 A：重跑 workflow（推荐）**
+
+```bash
+gh run rerun <run-id>          # 重跑失败的运行
+# 或重新打 tag
+git tag -d v1.0.0 && git push origin :refs/tags/v1.0.0
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+**方式 B：临时创建 API Key（会削弱受信任发布的意义）**
+
+仅在 workflow 本身故障、急需发版时使用：到 nuget.org 手动创建一个短期
+API Key（限定 Glob 为 `NanoServer`、有效期设为最短），用它推送，**用完立即撤销**。
 
 ```bash
 dotnet nuget push artifacts/NanoServer.1.0.0.nupkg \
-  --api-key <你的 key> \
-  --source https://api.nuget.org/v3/index.json
-
-# 符号包
-dotnet nuget push artifacts/NanoServer.1.0.0.snupkg \
-  --api-key <你的 key> \
+  --api-key <临时 key> \
   --source https://api.nuget.org/v3/index.json
 ```
 
-`--skip-duplicate` 可加在末尾：版本已存在时不报错（用于幂等重跑）。
+`--skip-duplicate` 表示版本已存在时不报错（用于幂等重跑）。
 
 ---
 
@@ -169,9 +207,11 @@ dotnet add package NanoServer
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `403 Forbidden` | API key 无权限或 Glob 不匹配 | 检查 key 的 Glob pattern 是否为 `NanoServer` |
+| `403 Forbidden` | 策略 Scopes 不足 | 确认含 `Push new packages and package versions` |
 | `409 Conflict` | 该版本号已存在 | NuGet 不允许覆盖，改版本号重发 |
-| `401 Unauthorized` | secret 未配置或名称拼错 | 确认 Secrets 里有 `NUGET_API_KEY` |
+| `401 Unauthorized` / `bearer token could not be parsed` | `NUGET_USER` 未配置或填了邮箱 | 填 nuget.org 用户名（profile name） |
+| OIDC 令牌交换被拒 | 策略与 workflow 不匹配 | 逐项核对：workflow 文件名、仓库名、environment 名 |
+| `No matching trust policy` | 策略的 Glob 不匹配包名 | 确认 Glob 为 `NanoServer*` |
 | workflow 卡在安全回归 | 服务启动慢或端口占用 | 查看日志，workflow 有 20 秒等待上限 |
 | 包推上去但搜不到 | 索引延迟 | 等 15 分钟，或直接访问包页面 URL |
 | `TreatWarningsAsErrors` 报 NU1900 | 这是环境性 NuGet 警告 | workflow 已限定只把 CS 警告视为错误 |

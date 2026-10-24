@@ -15,9 +15,17 @@ jobs:
   release:
     name: 打包并发布
     runs-on: ubuntu-latest
+
+    # 必须与 nuget.org 受信任发布策略里的 Environment 完全一致（本例为 release）。
+    # 若策略里 Environment 留空，则删除本段；若两处不一致，OIDC 令牌不含对应声明，
+    # 令牌交换会失败并报 401。
+    environment:
+      name: release
+      url: https://www.nuget.org/packages/NanoServer
+
     permissions:
       contents: write     # 创建 GitHub Release 需要
-      id-token: write     # NuGet Trusted Publishing（可选）
+      id-token: write     # 请求 GitHub OIDC 令牌 —— 受信任发布必需
 
     steps:
       - uses: actions/checkout@v4
@@ -74,19 +82,38 @@ jobs:
           echo "=== 包内文件 ==="
           unzip -l "$NUPKG"
 
+      # 用 GitHub OIDC 令牌向 nuget.org 换取一次性临时 API Key。
+      # 注意：临时 key 有效期 1 小时且只能用于一次交换，故必须紧贴推送前调用。
+      - name: NuGet 登录（OIDC → 临时 API Key）
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          # nuget.org 的「用户名 / profile name」，不是邮箱。
+          # 建议存为仓库 secret 的 NUGET_USER，避免硬编码。
+          user: ${{ secrets.NUGET_USER }}
+
       - name: 发布到 NuGet.org
         run: |
+          KEY="${{ steps.nuget-login.outputs.NUGET_API_KEY }}"
+          if [ -z "$KEY" ]; then
+            echo "::error::未取到临时 API Key，检查 NUGET_USER 与受信任发布策略是否匹配"
+            exit 1
+          fi
+
           NUPKG=$(ls artifacts/*.nupkg | head -1)
-          SNPUPKG=$(ls artifacts/*.snupkg 2>/dev/null | head -1 || true)
+          echo "推送主包：$NUPKG"
           dotnet nuget push "$NUPKG" \
-            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --api-key "$KEY" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
+
+          SNUPKG=$(ls artifacts/*.snupkg 2>/dev/null | head -1 || true)
           if [ -n "$SNUPKG" ]; then
+            echo "推送符号包：$SNUPKG"
             dotnet nuget push "$SNUPKG" \
-              --api-key "${{ secrets.NUGET_API_KEY }}" \
+              --api-key "$KEY" \
               --source https://api.nuget.org/v3/index.json \
-              --skip-duplicate || echo "符号包推送失败（不影响主包）"
+              --skip-duplicate || echo "::warning::符号包推送失败（不影响主包可用性）"
           fi
 
       - name: 创建 GitHub Release
