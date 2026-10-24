@@ -17,6 +17,7 @@ await server.StartAsync("127.0.0.1", 8090);
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | 全部配置参数：默认值、边界、调优建议 |
 | [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md) | 性能优化评估与实测数据 |
 | [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md) | 安全审计报告 |
+| [docs/PUBLISHING.md](docs/PUBLISHING.md) | 发布指南：NuGet Key 配置、打 tag 发版 |
 | [docs/README.md](docs/README.md) | 文档索引（按场景查） |
 
 ## 来源说明
