@@ -128,11 +128,37 @@ git push origin v1.0.0-beta.1
 | 上传产物 / 校验包内容 | ✅ | ✅ |
 | 起服务跑 28 项安全回归 | ✅ | ✅ |
 | 从 tag 推导版本号 | — | ✅ |
-| **发布到 NuGet.org** | — | ⬜ 待配置 secret |
+| **发布到 NuGet.org** | — | ✅（OIDC 换取临时 key 成功） |
 | 创建 GitHub Release | — | ⬜ 依赖上一步 |
 
-> 验证方式：推送 `v1.0.0-beta.1` tag 触发真实运行，确认前 9 步成功后删除该 tag
-> （NuGet 上未留下任何版本）。**配置好受信任发布策略与 `NUGET_USER` 后即可正式发布。**
+> **受信任发布已实测成功**：推送 `v1.0.0-beta.1` 后 workflow **12 步全通过**，
+> 日志显示 `Successfully exchanged OIDC token for NuGet API key`、
+> `PUT https://www.nuget.org/api/v2/package/ → Created (201)`，
+> 包已上架 nuget.org 并可从官方源 `dotnet add package` 安装、编译、运行正常。
+
+### 索引延迟是本项目踩过的坑
+
+推送成功到 `flatcontainer` 索引可查，实测**约 5–6 分钟**。期间：
+
+| 查询方式 | 是否立即可见 |
+|---|---|
+| nuget.org 网页（已登录） | 立即可见 |
+| `flatcontainer/{id}/index.json` | 约 5 分钟后 |
+| `registration5-gz-semver2` | 更慢 |
+| 搜索 API `azuresearch` | 更慢 |
+
+**不要因为 API 返回 404 就判定发布失败**——先查网页，或等 5–10 分钟。
+
+### 国内镜像源同步延迟
+
+若 NuGet 配置里有国内镜像（如华为云），新包**不会立即同步**，会出现
+「index.json 里明明有版本，但 `dotnet add package` 报无可用版本」。
+临时用官方源验证：
+
+```bash
+dotnet add package NanoServer --version 1.0.0-beta.1 \
+  --source https://api.nuget.org/v3/index.json
+```
 
 ## 三、本地打包（不上传）
 
