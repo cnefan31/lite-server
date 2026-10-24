@@ -8,6 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using LiteServer.Sample.Di;
 using LiteServer.Sample.Jobs;
+using LiteServer.Sample.Push;
 using LiteServer.Security;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -49,16 +50,9 @@ public static class Program
         // 降低框架自身噪音，突出应用日志
         builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
 
-        // ===== 依赖注入验证：三种生命周期各注册一个 =====
-        builder.Services.AddSingleton<SingletonCounter>();   // 全进程共享
-        builder.Services.AddScoped<ScopedStamp>();           // 每请求一个
-        builder.Services.AddTransient<TransientStamp>();     // 每次解析都新建
-        builder.Services.AddScoped<DiShowcase>();            // 构造函数注入三种生命周期
-
-        // ===== 后台任务服务：随通用主机启动/停止 =====
-        builder.Services.AddSingleton<JobService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<JobService>());
-
+        // 先注册 LiteServer：其 HostedService 最早启动、最后停止。
+        // .NET 的停止顺序与注册顺序相反，故后注册的 PushService 会先收到 StopAsync，
+        // 从而在 WebSocket 被关闭前仍有机会发出「服务停止」通知。
         builder.Services.AddLiteServer(
             options =>
             {
@@ -84,12 +78,29 @@ public static class Program
                 options.AnonymousPaths.Add("/api/di/log");
                 options.AnonymousPaths.Add("/api/jobs");
                 options.AnonymousPaths.Add("/api/logs/info");
+                options.AnonymousPaths.Add("/api/push");
             },
             server =>
             {
                 RegisterRoutes(server);
                 JobEndpoints.Map(server);   // 后台任务 + DI 探测端点
+                PushEndpoints.Map(server);  // WebSocket 推送控制端点
             });
+
+        // ===== 依赖注入验证：三种生命周期各注册一个 =====
+        builder.Services.AddSingleton<SingletonCounter>();   // 全进程共享
+        builder.Services.AddScoped<ScopedStamp>();           // 每请求一个
+        builder.Services.AddTransient<TransientStamp>();     // 每次解析都新建
+        builder.Services.AddScoped<DiShowcase>();            // 构造函数注入三种生命周期
+
+        // ===== 后台任务服务：随通用主机启动/停止 =====
+        builder.Services.AddSingleton<JobService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<JobService>());
+
+        // ===== WebSocket 定时推送：定时向所有在线客户端广播指标 =====
+        builder.Services.AddSingleton<PushService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<PushService>());
+
 
         using IHost host = builder.Build();
 
@@ -128,6 +139,7 @@ public static class Program
         services.AddTransient<TransientStamp>();
         services.AddScoped<DiShowcase>();
         services.AddSingleton<JobService>();
+        services.AddSingleton<PushService>();
         services.AddLogging(b => b.AddSimpleConsole().SetMinimumLevel(LogLevel.Information));
         ServiceProvider provider = services.BuildServiceProvider();
 
@@ -149,7 +161,8 @@ public static class Program
               .AllowAnonymous("/api/di")
               .AllowAnonymous("/api/di/log")
               .AllowAnonymous("/api/jobs")
-              .AllowAnonymous("/api/logs/info");
+              .AllowAnonymous("/api/logs/info")
+              .AllowAnonymous("/api/push");
 
         // 中间件顺序即执行顺序
         server.UseCors();
@@ -161,10 +174,14 @@ public static class Program
 
         RegisterRoutes(server);
         JobEndpoints.Map(server);
+        PushEndpoints.Map(server);
         RegisterWebSocket(server);
 
         // 后台任务在独立模式下没有宿主来托管，这里手动随服务一起起停。
         var jobs = provider.GetRequiredService<JobService>();
+        var push = provider.GetRequiredService<PushService>();
+        // 独立模式没有宿主，需手动启动后台服务的循环
+        _ = push.StartAsync(CancellationToken.None);
 
         // 顺序要与通用主机模式保持一致：静态先于鉴权。
         server.UseStaticFiles("/", Path.Combine(AppContext.BaseDirectory, "wwwroot"), 0, server.Logger);
@@ -181,6 +198,7 @@ public static class Program
         await quit.Task.ConfigureAwait(false);
 
         // 独立模式下需要自己停后台服务并释放容器。
+        await push.StopAsync(CancellationToken.None).ConfigureAwait(false);
         await jobs.StopAsync(CancellationToken.None).ConfigureAwait(false);
         await provider.DisposeAsync().ConfigureAwait(false);
         return 0;

@@ -68,6 +68,10 @@ public static class ServiceCollectionExtensions
             return server;
         });
 
+        // 把服务器持有的 WebSocketHub 暴露给容器：后台推送服务需要注入它来广播。
+        services.TryAddSingleton<WebSockets.WebSocketHub>(sp =>
+            sp.GetRequiredService<LiteWebServer>().WebSockets);
+
         services.TryAddSingleton<LiteServerHost>(sp =>
         {
             LiteWebServer server = sp.GetRequiredService<LiteWebServer>();

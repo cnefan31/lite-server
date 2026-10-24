@@ -234,6 +234,12 @@ td.c-name code{
 td.c-ok{color:var(--ok);font-weight:600}
 td.c-no{color:var(--err);font-weight:600}
 td.c-dim{color:var(--ink-3);font-variant-numeric:tabular-nums}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin:4px 0 0}
+.tile{background:var(--tile);border-radius:12px;padding:12px 14px}
+.tile .k{font-size:11.5px;color:var(--ink-3);letter-spacing:.02em;margin-bottom:4px}
+.tile .v{font-size:20px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.tile .u{font-size:12px;color:var(--ink-3);font-weight:400;margin-left:2px}
+
 .verdict{
   margin:20px 0 0;font-size:15px;font-weight:600;letter-spacing:-.01em;
   display:flex;align-items:center;gap:9px;
@@ -326,7 +332,8 @@ footer{
     <a href="#s6">其它</a>
     <a href="#s7">DI 与后台任务</a>
     <a href="#s8">日志</a>
-    <a href="#s9">全量自测</a>
+    <a href="#s9">服务端推送</a>
+    <a href="#s10">全量自测</a>
   </nav>
 
   <!-- ① 鉴权 -->
@@ -493,9 +500,32 @@ footer{
     </div>
   </section>
 
-  <!-- ⑨ 全量自测 -->
+  <!-- ⑨ 服务端推送 -->
   <section class="sec" id="s9">
-    <div class="sec-hd"><span class="num">09</span><h2>全量自测</h2></div>
+    <div class="sec-hd"><span class="num">09</span><h2>服务端推送</h2></div>
+    <p class="sec-desc">
+      后台 <code>HostedService</code> 定时向所有 WebSocket 连接广播运行时指标。
+      无在线连接时它跳过组帧与序列化，空闲几乎零开销。
+    </p>
+    <div class="group">
+      <div class="bar">
+        <button class="solid" id="btnPushStart">连接并接收推送</button>
+        <button class="quiet" id="btnPushStop" disabled>断开</button>
+        <span class="lab">间隔</span>
+        <input type="text" id="pushInterval" value="1000" style="flex:0 1 90px">
+        <button data-call="push-interval" class="quiet mini">应用间隔(ms)</button>
+        <button data-call="push-now" class="quiet mini">立即推送一帧</button>
+        <button data-call="push-status" class="quiet mini">查询状态</button>
+      </div>
+      <div class="tiles" id="pushTiles"></div>
+      <pre class="out" id="out-push" tabindex="0"></pre>
+      <pre class="out" id="out-pushctl" tabindex="0"></pre>
+    </div>
+  </section>
+
+  <!-- ⑩ 全量自测 -->
+  <section class="sec" id="s10">
+    <div class="sec-hd"><span class="num">10</span><h2>全量自测</h2></div>
     <p class="sec-desc">23 项断言，覆盖全部端点与失败路径，含一条 WebSocket 回声。逐项比对实际状态码与预期。</p>
     <div class="group">
       <div class="bar">
@@ -933,6 +963,133 @@ async function doJobCancel() {
   render("out-di", r, "取消请求已发出");
 }
 
+/* ---------------- ⑨ 服务端推送 ---------------- */
+let pushWs = null;
+
+const PUSH_TILES = [
+  ["seq", "序号", ""],
+  ["threads", "线程", ""],
+  ["memory", "工作集", "MB"],
+  ["gc", "GC 次数", ""],
+  ["uptime", "运行", "s"],
+  ["online", "在线", ""],
+  ["fps", "收帧率", "/s"],
+];
+
+function renderTiles(values) {
+  const host = $("pushTiles");
+  host.innerHTML = PUSH_TILES.map(([k, label, unit]) => {
+    const v = values[k] ?? "-";
+    return `<div class="tile"><div class="k">${label}</div>` +
+           `<div class="v">${v}${unit ? `<span class="u">${unit}</span>` : ""}</div></div>`;
+  }).join("");
+}
+
+function startPush() {
+  if (pushWs) return;
+  if (!S.token) return show("out-push", "推送需鉴权，请先登录。", true);
+
+  const u = new URL(base());
+  const proto = u.protocol === "https:" ? "wss:" : "ws:";
+  const target = `${proto}//${u.host}/ws?token=${encodeURIComponent(S.token)}`;
+
+  const log = [`连接 ${target}`];
+  show("out-push", log.join("\n"));
+
+  let frames = 0;
+  let windowStart = performance.now();
+  let lastSeq = null;
+  let lost = 0;
+
+  const ws = new WebSocket(target);
+  pushWs = ws;
+
+  ws.onopen = () => {
+    log.push("已连接，等待服务端推送…");
+    $("btnPushStop").disabled = false;
+    $("btnPushStart").disabled = true;
+    show("out-push", log.join("\n"));
+  };
+
+  ws.onmessage = ev => {
+    let f;
+    try { f = JSON.parse(ev.data); } catch { return; }
+
+    // 非推送帧（例如示例回显）不参与指标统计
+    if (!f || typeof f.seq !== "number" || !f.payload) {
+      log.push("← " + ev.data);
+      show("out-push", log.join("\n"));
+      return;
+    }
+
+    frames++;
+    if (lastSeq !== null && f.seq > lastSeq + 1) lost += f.seq - lastSeq - 1;
+    lastSeq = f.seq;
+
+    const now = performance.now();
+    const elapsed = (now - windowStart) / 1000;
+    const fps = elapsed > 0 ? (frames / elapsed).toFixed(1) : "-";
+
+    const p = f.payload;
+    renderTiles({
+      seq: f.seq,
+      threads: p.managedThreads,
+      memory: p.workingSetMB,
+      gc: `${p.gcGen0}/${p.gcGen1}/${p.gcGen2}`,
+      uptime: p.uptimeSec,
+      online: f.onlineClients,
+      fps: fps,
+    });
+
+    log.push(`#${f.seq} ${p.message} 线程=${p.managedThreads} 内存=${p.workingSetMB}MB 在线=${f.onlineClients}`);
+    // 日志只留最近 8 条，避免无限增长
+    if (log.length > 9) log.splice(1, log.length - 9);
+    show("out-push", log.join("\n"));
+  };
+
+  ws.onerror = () => log.push("错误（token 可能已失效）");
+  ws.onclose = ev => {
+    log.push(`连接关闭 code=${ev.code}`);
+    if (lost > 0) log.push(`累计丢帧 ${lost}`);
+    pushWs = null;
+    $("btnPushStop").disabled = true;
+    $("btnPushStart").disabled = false;
+    show("out-push", log.join("\n"));
+  };
+}
+
+function stopPush() {
+  if (pushWs) pushWs.close();
+}
+
+async function doPushInterval() {
+  const ms = $("pushInterval").value.trim() || "1000";
+  const r = await call("POST", "/api/push/interval?ms=" + encodeURIComponent(ms),
+    { headers: { "Content-Length": "0" }, expect: 200 });
+  if (r.ok) $("pushInterval").value = r.parsed.intervalMs;
+  render("out-pushctl", r, "服务端推送间隔已更新");
+}
+
+async function doPushNow() {
+  const r = await call("POST", "/api/push/now",
+    { headers: { "Content-Length": "0" }, expect: 200 });
+  render("out-pushctl", r, r.parsed && r.parsed.delivered === false ? "当前无在线连接" : "已推送");
+}
+
+async function doPushStatus() {
+  const r = await call("GET", "/api/push/status", { expect: 200 });
+  if (!r.ok) return render("out-pushctl", r);
+  const d = r.parsed;
+  show("out-pushctl",
+    `200 · ${r.ms} ms · 符合预期\nGET /api/push/status\n\n` +
+    `运行中:     ${d.running}\n` +
+    `推送间隔:   ${d.intervalMs} ms\n` +
+    `累计发送:   ${d.sentTotal} 帧\n` +
+    `最近序号:   ${d.lastSeq}\n` +
+    `在线连接:   ${d.onlineClients}\n` +
+    `最近发送:   ${d.lastSentAt ?? "（尚未发送）"}`);
+}
+
 /* ---------------- ⑧ 日志 ---------------- */
 async function doLogInfo() {
   const r = await call("GET", "/api/logs/info", { expect: 200 });
@@ -1099,6 +1256,9 @@ const DISPATCH = {
   "log-trigger-auth": () => doLogTrigger("auth"),
   "log-trigger-404": () => doLogTrigger("404"),
   "log-trigger-dotfile": () => doLogTrigger("dotfile"),
+  "push-interval": doPushInterval,
+  "push-now": doPushNow,
+  "push-status": doPushStatus,
 };
 
 document.addEventListener("click", e => {
@@ -1119,6 +1279,8 @@ $("btnSseStop").onclick = () => {
 $("btnWsSend").onclick = wsSend;
 $("btnWsClose").onclick = () => { if (S.ws) S.ws.close(); };
 $("btnRunAll").onclick = runAll;
+$("btnPushStart").onclick = startPush;
+$("btnPushStop").onclick = stopPush;
 $("baseUrl").onchange = () => { S.base = normBase($("baseUrl").value); $("baseUrl").value = S.base; };
 
 /* ---------------- 初始化 ---------------- */

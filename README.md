@@ -150,6 +150,56 @@ server.MapGet("/api/di", (req, res) =>
 | `GET /api/di/log` | `ILogger<T>` 构造函数注入在 AOT 下可用 |
 | `GET/POST/DELETE /api/jobs[/{id}]` | 后台任务创建、进度轮询、取消，由 `BackgroundService` 承载 |
 
+## 服务端主动推送
+
+示例包含一个基于 `BackgroundService` 的定时推送服务，向所有在线 WebSocket 连接广播运行时指标
+（线程数、工作集、GC 次数、运行时长、在线连接数）。
+
+```csharp
+public sealed class PushService : BackgroundService
+{
+    private readonly WebSocketHub _hub;
+
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
+        {
+            await Task.Delay(IntervalMs, ct);
+            if (_hub.Count == 0) continue;      // 无客户端时跳过组帧与序列化
+            await _hub.BroadcastAsync(BuildFrameJson());
+        }
+    }
+}
+
+// 注册（需在 AddLiteServer 之后，见下方「停止顺序」）
+builder.Services.AddSingleton<PushService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PushService>());
+```
+
+`AddLiteServer` 会把服务器的 `WebSocketHub` 注册进容器，后台服务直接构造函数注入即可使用。
+
+控制端点：
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/push/status` | 运行状态、累计帧数、在线连接列表 |
+| `POST /api/push/interval?ms=` | 调整推送间隔（200–60000 自动收敛） |
+| `POST /api/push/now` | 立即推送一帧 |
+
+### 停止顺序（容易踩的坑）
+
+.NET 通用主机的 **HostedService 停止顺序与注册顺序相反**（后注册先停）。
+若 `LiteServerHost` 后注册，它会先停止并关闭所有 WebSocket，
+导致推送服务已无法发出「服务停止」通知——客户端只会看到连接静默断开。
+
+实测验证：把 `AddLiteServer` 放在最前注册，`PushService` 注册在它之后，
+停机时客户端就能收到 `{"kind":"notice","payload":{"message":"服务正在停止"}}`。
+
+### 前端展示
+
+页面第 09 区「服务端推送」：建立 WebSocket 后实时渲染指标卡片与帧日志，
+可调间隔、手动触发一帧、查看服务端状态。前端还会检测帧序号跳变并统计丢帧数。
+
 ## 日志
 
 库内所有关键路径都有结构化日志，基于 `Microsoft.Extensions.Logging` 抽象，
