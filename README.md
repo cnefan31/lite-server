@@ -248,6 +248,14 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<PushService>());
 
 ### 接入方式
 
+**日志后端可替换**：库只依赖 `ILogger` 抽象。示例工程接入 **NLog**
+（控制台 + 按天滚动文件），并可切到任意 provider：
+
+```csharp
+builder.Logging.ClearProviders();
+builder.Logging.AddNLog();      // 需 nlog.config 随程序发布
+```
+
 **通用主机模式**（自动注入，无需额外代码）：
 
 ```csharp

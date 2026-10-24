@@ -21,12 +21,15 @@
   <ItemGroup>
     <!-- 静态资源随构建/发布一起复制 -->
     <Content Include="wwwroot/**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- NLog 配置文件：必须随程序发布，否则 NLog 找不到配置、静默不输出 -->
+    <Content Include="nlog.config" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- 通用主机所需的具体实现（仅示例需要，类库本身不依赖） -->
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.13" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.13" />
+    <PackageReference Include="NLog.Extensions.Logging" Version="6.2.2" />
   </ItemGroup>
 
 </Project>

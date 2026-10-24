@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NLog.Extensions.Logging;
 using NanoServer.Sample.Di;
 using NanoServer.Sample.Jobs;
 using NanoServer.Sample.Push;
@@ -38,15 +39,11 @@ public static class Program
     {
         HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 
+        // ===== 日志：改用 NLog =====
+        // 配置文件 nlog.config 随程序一起发布，同时输出到控制台与滚动文件。
+        // 级别过滤在 nlog.config 的 rules 中完成（Microsoft.* 只记 Warning+）。
         builder.Logging.ClearProviders();
-        builder.Logging.AddSimpleConsole(o =>
-        {
-            o.SingleLine = true;
-            o.TimestampFormat = "HH:mm:ss ";
-        });
-        builder.Logging.SetMinimumLevel(LogLevel.Information);
-        // 降低框架自身噪音，突出应用日志
-        builder.Logging.AddFilter("Microsoft", LogLevel.Warning);
+        builder.Logging.AddNLog();   // 默认读取随程序发布的 nlog.config
 
         // 先注册 NanoServer：其 HostedService 最早启动、最后停止。
         // .NET 的停止顺序与注册顺序相反，故后注册的 PushService 会先收到 StopAsync，
@@ -138,7 +135,12 @@ public static class Program
         services.AddScoped<DiShowcase>();
         services.AddSingleton<JobService>();
         services.AddSingleton<PushService>();
-        services.AddLogging(b => b.AddSimpleConsole().SetMinimumLevel(LogLevel.Information));
+        // 独立模式同样使用 NLog（与通用主机模式保持一致）
+        services.AddLogging(b =>
+        {
+            b.ClearProviders();
+            b.AddNLog();
+        });
         ServiceProvider provider = services.BuildServiceProvider();
 
         await using var server = new NanoWebServer();

@@ -6,8 +6,9 @@ dist/
 *.suo
 .vs/
 
-# 示例服务运行时产生的上传目录
+# 示例服务运行时产生的上传目录与日志
 samples/**/data/
+samples/**/logs/
 
 # 本机专用 NuGet 配置（含与开发机绑定的包缓存路径，不应共享）
 nuget.config

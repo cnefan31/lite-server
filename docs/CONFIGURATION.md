@@ -202,6 +202,63 @@ server.AccessLog.IncludeQueryString = false;   // 保持默认，防 token 落�
 
 ---
 
+## 六·五、日志后端（NLog）
+
+库本身依赖 `Microsoft.Extensions.Logging` **抽象**，可用任意 provider。
+示例工程默认接入 **NLog**（`NLog.Extensions.Logging`），同时输出到控制台与滚动文件。
+
+### 接入方式
+
+```csharp
+using NLog.Extensions.Logging;
+
+// 通用主机
+builder.Logging.ClearProviders();
+builder.Logging.AddNLog();      // 默认读取随程序发布的 nlog.config
+
+// 独立模式
+services.AddLogging(b => { b.ClearProviders(); b.AddNLog(); });
+```
+
+### 配置文件
+
+`nlog.config` **必须随程序发布**，否则 NLog 找不到配置、静默不输出任何日志
+（这是最容易踩的坑：编译通过、运行无报错、就是没有日志）。
+
+csproj 需显式声明复制：
+
+```xml
+<Content Include="nlog.config" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+```
+
+> 注意用 `Content Include` 而非 `None Update`——后者只对「已被 SDK 隐式纳入」的文件有效。
+
+### 示例配置要点
+
+| 项 | 值 | 说明 |
+|---|---|---|
+| console target | `ColoredConsole` | 开发时观察 |
+| file target | `File` + `archiveEvery=Day` | 按天切分，保留 7 天，单文件上限 10MB |
+| `keepFileOpen` | `false` | 便于日志被外部工具读取/轮转 |
+| `Microsoft.*` 规则 | `maxlevel="Info" final="true"` | 屏蔽框架 Info 噪音，只留 Warning+ |
+| `NanoServer.*` 规则 | `minlevel="Trace"` | 本项目日志全量记录 |
+
+### NativeAOT 兼容性（已实测）
+
+NLog 6.2.2 **在 NativeAOT 下可用**，`dotnet publish -r osx-arm64` 零 IL 警告；
+AOT 产物中控制台与文件日志均正常输出。前提是：
+
+1. 用文件/代码配置，不依赖反射式类型发现
+2. `nlog.config` 随产物一起复制
+
+```csharp
+// 若不想用配置文件，可在代码中直接配置（AOT 同样可行）
+var config = new NLog.Config.LoggingConfiguration();
+var console = new NLog.Targets.ConsoleTarget("console");
+config.AddRule(NLog.LogLevel.Info, NLog.LogLevel.Fatal, console);
+NLog.LogManager.Configuration = config;
+```
+
 ## 七、路由
 
 路由表本身无配置项，但有若干**硬编码边界**：
