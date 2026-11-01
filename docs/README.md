@@ -6,6 +6,7 @@
 | [API.md](API.md) | **全部公开 API**：方法签名、参数、返回、示例 | 开发时查阅 |
 | [CONFIGURATION.md](CONFIGURATION.md) | **全部可配置参数**：默认值、边界、调优建议与实测数据 | 部署调优 |
 | [OPTIMIZATION.md](OPTIMIZATION.md) | 性能优化评估：已做项数据、可继续做的方向、不建议做的项 | 关心性能 |
+| [PR-OPTIMIZATION-PLAN.md](PR-OPTIMIZATION-PLAN.md) | 建议提交的 PR 优化路线、优先级与验证方案 | 维护者 / 贡献者 |
 | [SECURITY-AUDIT.md](SECURITY-AUDIT.md) | 安全审计：已修漏洞、验证通过项、加固建议 | 安全评审 |
 | [PUBLISHING.md](PUBLISHING.md) | 发布指南：NuGet API Key 配置、打 tag 发版、本地打包 | 维护者 |
 
@@ -30,6 +31,8 @@
 **上传大小限制** → CONFIGURATION § 十、文件传输（库不限制，需业务层做）
 
 **后台推送前端** → README「服务端主动推送」/ `samples/NanoServer.Sample/Push/`
+
+**准备提交优化 PR** → PR-OPTIMIZATION-PLAN.md
 
 ## 实测数据说明
 
